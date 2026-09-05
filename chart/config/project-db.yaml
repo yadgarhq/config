@@ -1,0 +1,26 @@
+# project-db.yaml — settings read only by `project-db`.
+#
+# **NO KNOB LIVES HERE YET.** See `gateway.yaml`. The file exists so the
+# ConfigMap is rendered and mounted from the module's first release, because
+# adding the mount later is a chart change that restarts the pod for no
+# functional reason.
+#
+# WHAT BELONGS HERE FIRST IS ALREADY KNOWN: **the maximum depth of a project
+# path.** D53 caps it — "unbounded nesting invites paths nobody meant to create
+# and makes prefix indexes worse for no gain" — and says the limit is
+# CONFIGURATION (D43) rather than a constant. `project-db`'s `src/path.rs`
+# therefore implements NO cap: ADR-0569 leaves a knob no compiled-in default to
+# fall back on, so a number invented in the binary would be the defect this
+# repository exists to delete, not a placeholder for the fix. What bounds a path
+# in the meantime is its LENGTH, at the width of the column that stores it.
+#
+# Adding it is more than a line here. `yadgar-lifecycle`'s `Configuration` reads
+# `shared/shared.yaml` and has no API for a per-service document, so nothing
+# reads this file today and nothing watches it — see the volumeMount comment in
+# `project-db`'s `chart/templates/deployment.yaml`. The pull request that adds
+# the first knob is the one that joins this document to that module's ADR-0523
+# watch set.
+#
+# WHAT DOES NOT BELONG HERE: a secret of any kind. See `iam-db.yaml` — this
+# repository is public and cloned, so a credential written here is a credential
+# published.

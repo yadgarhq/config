@@ -41,6 +41,7 @@ chart/config/iam.yaml           ... and so on, one file per service
 chart/config/iam-db.yaml
 chart/config/task.yaml
 chart/config/task-db.yaml
+chart/config/project-db.yaml     the project registry's — empty, and its first knob is D53's depth cap
 chart/config/audit.yaml         the audit module's — designed, not built, nothing reads it
 scripts/one_source_per_knob.py  the gate below
 ```
@@ -109,7 +110,7 @@ Argo syncs this chart through `yadgarhq/deploy`'s `infra/config-app.yaml`, at a 
 
 **Do not add the `yadgar-deployable` topic to this repository.** The ApplicationSet in `yadgarhq/argocd` selects repositories by that topic AND a `chart/` directory, and this repository has the directory. Adding the topic would mint a second Application for the same chart at sync wave 10 — after the modules that read it — and two Applications owning one set of ConfigMaps is a fight neither wins.
 
-**These ConfigMap names are reserved**: `shared`, `gateway`, `iam`, `task`, `iam-db`, `task-db`, `audit`, in namespace `yadgar`. No module chart renders a ConfigMap today, which is what makes the unprefixed names safe; a module chart that later renders one named after itself would collide with this repository.
+**These ConfigMap names are reserved**: `shared`, `gateway`, `iam`, `task`, `iam-db`, `task-db`, `project-db`, `audit`, in namespace `yadgar`. No module chart renders a ConfigMap today, which is what makes the unprefixed names safe; a module chart that later renders one named after itself would collide with this repository.
 
 ## Status
 
@@ -118,6 +119,8 @@ Argo syncs this chart through `yadgarhq/deploy`'s `infra/config-app.yaml`, at a 
 | `tlsRotation.pollSeconds`     | `yadgar-lifecycle`, linked by all five services                             |
 | `tlsRotation.splayMaxSeconds` | `yadgar-lifecycle`, linked by all five services                             |
 | `audit.retentionDays`         | **none — awaiting its consumer.** The audit store is designed and not built |
+
+`project-db.yaml` is rendered and carries no knob at all: its first one is D53's project-path depth cap, and `project-db` ships with no compiled-in default standing in for it.
 
 The rotation knobs have a reader in the library and **no service reads them from here yet.** The five services pin `yadgar-lifecycle` by an immutable git tag, and the version that reads this repository has not been cut. The remaining work per service is a version bump, a call-site change, a volume and volume mount, and the deletion of the `tlsRotation` block from that service's own chart values.
 
