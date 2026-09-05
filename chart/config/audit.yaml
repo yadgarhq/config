@@ -1,0 +1,26 @@
+# audit.yaml — the audit module's settings.
+#
+# **NOTHING READS THIS FILE YET.** The audit store is designed and not built:
+# `yadgar.audit.v1` exists in `yadgarhq/proto`, and no repository implements it.
+# The ConfigMap is rendered and mounted by nobody, and the value below governs
+# nothing that runs today. It is written down here rather than left out because
+# ADR-0569 gives the number one home and this is it; when the module is built it
+# reads this file and refuses to start without it, like every other knob.
+#
+# ITS OWN FILE RATHER THAN `shared.yaml`, and the reason is blast radius. Editing
+# `shared.yaml` restarts all five running services. A retention window belonging
+# to a module that does not exist has no business being able to do that.
+
+audit:
+  # How long an audit record is kept. Ninety days is ADR-0569's stated shipped
+  # starting value — the number an installation inherits deliberately by cloning
+  # this repository, rather than one a binary picks when nobody looked.
+  #
+  # A LINE TO EDIT, not a number to derive. That is the half of ADR-0569 that
+  # makes the no-default rule workable: an operator with a different obligation
+  # changes this and can see what they changed in a diff.
+  #
+  # D25 is the constraint any change has to respect: an audit log with silent
+  # holes is worse than none, because it will be trusted. Shortening this window
+  # is a decision about what stops being answerable, not a storage tuning knob.
+  retentionDays: 90

@@ -1,0 +1,57 @@
+{{/*
+ONE ConfigMap PER FILE IN `config/`, named after the file and carrying it whole.
+
+  chart/config/shared.yaml   ->  ConfigMap `shared`,   key `shared.yaml`
+  chart/config/gateway.yaml  ->  ConfigMap `gateway`,  key `gateway.yaml`
+
+and so on. A service mounts the ConfigMaps it reads as DIRECTORIES, so
+`shared.yaml` arrives at `/etc/yadgar/config/shared/shared.yaml` — which is the
+path `yadgar-lifecycle` names when a knob is missing, and the same file name the
+operator edits here.
+
+NOTHING ENUMERATES THE SERVICES. The glob is the list, so adding a service is
+adding a file. A `range` over a hard-coded list here would be the central list
+D54 exists to delete, one repository over.
+
+THE FILE IS COPIED, NOT TEMPLATED. `.Files.Get` hands back the bytes on disk, so
+comments survive into the cluster and no rendering step stands between what an
+operator wrote and what a process reads. It also means a `{{` inside one of those
+documents is data rather than a template — which is correct, and worth knowing
+before somebody tries to make a knob depend on a Helm value.
+
+MAPS RANGE IN KEY ORDER in Go templates, so the rendered output is stable and a
+`helm template` diff shows only what actually changed.
+*/}}
+{{- range $path, $_ := .Files.Glob "config/*.yaml" }}
+{{- $file := base $path }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  # THE FILE NAME IS THE CONFIGMAP NAME, so `kubectl -n yadgar get cm iam-db`
+  # answers "what is iam-db configured with" without anybody having to know a
+  # naming scheme.
+  #
+  # NO PREFIX AND NO RELEASE NAME. A prefix would have to be hard-coded into
+  # every consuming chart's volume, which puts this repository's release name
+  # inside five other repositories. Checked before choosing it: no chart in the
+  # estate renders a ConfigMap at all today, so there is nothing to collide with.
+  # That is a fact about today rather than a guarantee — a module chart that
+  # later renders a ConfigMap named after itself WOULD collide, and two Argo
+  # Applications owning one object is a fight neither wins. The README records
+  # these names as reserved.
+  name: {{ trimSuffix ".yaml" $file }}
+  labels:
+    app.kubernetes.io/name: {{ trimSuffix ".yaml" $file }}
+    app.kubernetes.io/component: configuration
+    app.kubernetes.io/part-of: yadgar
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+data:
+  # THE INDENT IS THE ONLY THING THE TEMPLATE ADDS. A block scalar needs one, and
+  # `indent` puts four spaces on EVERY line including the blank ones — which would
+  # write trailing whitespace into the mounted file and make it differ from the
+  # file in this repository for no reason anybody could see. The regex takes those
+  # back off, so what a process reads is what an operator wrote, plus an indent.
+  {{ $file }}: |
+{{ regexReplaceAll "(?m)[ \t]+$" (indent 4 ($.Files.Get $path)) "" }}
+{{- end }}

@@ -1,0 +1,9 @@
+# task-db.yaml — settings read only by `task-db`.
+#
+# **NO KNOB LIVES HERE YET.** See `gateway.yaml`.
+#
+# WHAT BELONGS HERE: a value only `task-db` reads — a pool ceiling, a statement
+# timeout, a retention window for completed work.
+#
+# WHAT DOES NOT: a secret of any kind. See `iam-db.yaml` — this repository is
+# public and cloned, so a credential written here is a credential published.

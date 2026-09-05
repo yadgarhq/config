@@ -1,0 +1,5 @@
+# `helm package` output and fetched subcharts. Neither is produced by anything
+# here today — Argo renders the chart from git — but both land in the working
+# tree the moment somebody runs helm by hand.
+*.tgz
+chart/charts/

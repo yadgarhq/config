@@ -1,0 +1,11 @@
+# task.yaml — settings read only by `task`.
+#
+# **NO KNOB LIVES HERE YET.** See `gateway.yaml`.
+#
+# WHAT BELONGS HERE: a value only `task` reads — a queue lease, a retry ceiling,
+# a page size it chooses.
+#
+# WHAT DOES NOT: a drain budget. That one reads like configuration and is not:
+# `yadgar-lifecycle`'s budget has to stay inside the pod's termination grace
+# period, which is a chart value, so the two must move together and a second
+# source would let them disagree. ADR-0569's consequences call this out by name.

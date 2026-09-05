@@ -1,0 +1,17 @@
+# iam-db.yaml — settings read only by `iam-db`.
+#
+# **NO KNOB LIVES HERE YET.** See `gateway.yaml`.
+#
+# WHAT BELONGS HERE: a value only `iam-db` reads — a pool ceiling, a statement
+# timeout, a batch size.
+#
+# WHAT DOES NOT: the database host, user, name or ssl-mode. Those are already
+# chart values in `yadgarhq/iam-db`, and moving them here without deleting them
+# there would be two sources for one value. If they should move, that is a
+# deliberate change to make in both places at once, not a line added here.
+#
+# NEVER A PASSWORD, A KEY OR A CERTIFICATE. This repository is PUBLIC and it is
+# the thing an operator clones — anything secret in it is published. Credentials
+# have their own homes: `infra/bootstrap` generates what it can (ADR-0517), and
+# a data-bearing key is supplied by hand and deliberately never generated
+# (ADR-0518).
