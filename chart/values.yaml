@@ -1,0 +1,22 @@
+# THE KNOBS ARE NOT IN THIS FILE. They are in `chart/config/`, one document per
+# service plus `shared.yaml`, and each of those files is copied VERBATIM into a
+# ConfigMap of the same name.
+#
+# That is unusual for a Helm chart and it is the point rather than an oversight.
+# Three things follow from it, and each is a property this estate has paid for
+# the absence of before:
+#
+#   - THE FILE AN OPERATOR EDITS IS THE FILE A PROCESS READS, byte for byte. No
+#     templating stands between them, so there is no rendering step in which a
+#     value can become something the operator did not write.
+#   - COMMENTS REACH THE CLUSTER. `kubectl -n yadgar get cm shared -o yaml` shows
+#     the reasoning beside the number, so the person debugging at 3am reads the
+#     same argument as the person editing the repository.
+#   - ADDING A SERVICE IS ADDING A FILE. The template globs `config/*.yaml`;
+#     nothing here enumerates the services, so there is no central list to forget
+#     to update. Same property D54 buys for the module ApplicationSet.
+#
+# So this file stays empty of settings on purpose. A knob that appeared here would
+# be a SECOND place a value can live, and ADR-0569 gives a knob exactly one
+# source. If you are looking for `pollSeconds`, it is in `chart/config/shared.yaml`.
+{}

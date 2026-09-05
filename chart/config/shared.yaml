@@ -1,0 +1,47 @@
+# shared.yaml — knobs that every service reads, with the same value in each.
+#
+# EDITING THIS FILE RESTARTS THE WHOLE ESTATE, and that is by design rather than
+# by accident. Every service mounts this ConfigMap, the mounted file is in each
+# process's ADR-0523 watch set, and a changed file makes the process drain and
+# exit onto the new value. So a change here is a deliberate act: five services
+# roll. A knob that only one service reads belongs in that service's own file,
+# where the blast radius is one workload.
+#
+# A KNOB LIVES IN EXACTLY ONE FILE. There is no merge and no precedence between
+# this file and a service's own — a value present in both would be two writers for
+# one setting, which is the failure D4 exists to prevent, and it would fail
+# silently because both files look authoritative. `scripts/one_source_per_knob.py`
+# is a pre-commit hook and a CI gate that refuses a key path appearing twice.
+
+# ADR-0523's rotation watcher: how often a process re-hashes the files it read at
+# boot, and how long it waits before exiting when one of them changes.
+#
+# READ BY ALL FIVE SERVICES — gateway, iam, task, iam-db and task-db all run the
+# watcher through `yadgar-lifecycle`, and all five want the same numbers. That is
+# what makes these shared rather than per-service.
+#
+# THERE IS NO DEFAULT BEHIND THESE (ADR-0569). Delete either line and every
+# process that reads it refuses to start, naming the knob and this file. Until
+# 2026-09-05 the value fell back to a constant compiled into the binary, so an
+# installation that never set it ran 60 and 300 with nothing saying so; deleting
+# those constants is what this file replaces.
+tlsRotation:
+  # How often the watched files are re-hashed. Reading a handful of small files
+  # once a minute costs nothing, and the deadline it protects is 30 days wide:
+  # cert-manager renews a certificate 720h before it expires.
+  #
+  # `0` IS REFUSED at boot rather than read as "off". Sleeping for no time at all
+  # turns the watcher into a loop that re-reads and re-hashes as fast as a core
+  # allows, for the life of the pod. A process with nothing to watch is what
+  # leaves the watcher idle.
+  pollSeconds: 60
+  # The top of the range each pod draws its own wait from before it exits on a
+  # change. Every replica sees the same rotation at the same moment, and a
+  # PodDisruptionBudget does not govern a self-exit — it constrains eviction, and
+  # nothing here is evicting anything — so this is the only thing keeping two
+  # replicas from leaving together.
+  #
+  # `0` means exit at once, which is a supported choice and not a mistake. Five
+  # minutes is the shipped starting value because renewal lands 30 days before
+  # expiry: waiting costs nothing on that timescale.
+  splayMaxSeconds: 300

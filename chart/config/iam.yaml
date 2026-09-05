@@ -1,0 +1,14 @@
+# iam.yaml — settings read only by `iam`.
+#
+# **NO KNOB LIVES HERE YET.** See `gateway.yaml` for why an empty file is still
+# worth having: it is the obvious home for the first one, and it is what lets
+# every service mount the same pair of ConfigMaps.
+#
+# WHAT BELONGS HERE: a value only `iam` reads — a credential lifetime it chooses,
+# an enrolment window, a cache TTL for resolved identities.
+#
+# WHAT DOES NOT: a bound that is part of a CONTRACT rather than a deployment
+# choice. ADR-0569's own consequences name this trap: a maximum credential
+# lifetime that varied per installation would make callers get different answers
+# about what a field means, so it is not configuration and it does not belong in
+# this repository at all.
