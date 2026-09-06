@@ -3,3 +3,8 @@
 # tree the moment somebody runs helm by hand.
 *.tgz
 chart/charts/
+
+# Python bytecode, which `scripts/tests/` produces the first time it runs. The
+# gate and its suite are the only Python here and neither is packaged.
+__pycache__/
+*.pyc
