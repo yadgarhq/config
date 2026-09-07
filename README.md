@@ -62,7 +62,7 @@ D34 already states this for prompts — resolution replaces, it does not merge �
 
 ### Blast radius
 
-Editing `gateway.yaml` restarts `gateway`. **Editing `shared.yaml` restarts everything that mounts it**, which is all five services. That is correct by construction and worth knowing before you edit: a change to a shared knob is a deliberate estate-wide roll, not a surprise.
+Editing `gateway.yaml` restarts `gateway`. **Editing `shared.yaml` restarts everything that mounts it**, which is all six services — `gateway`, `iam`, `task`, `iam-db`, `task-db` and `project-db`. That is correct by construction and worth knowing before you edit: a change to a shared knob is a deliberate estate-wide roll, not a surprise.
 
 **Configuration changes roll pods by design.** A value read at boot changes by the process being restarted onto it, and nobody should read that restart as a fault. The mechanism is ADR-0523's rotation watcher and it needed no new code: it already watches every file the process read at boot, so a mounted ConfigMap is in the watch set by that rule alone. An operator edits a file here, Argo syncs the ConfigMap, kubelet swaps the mounted file, the digest changes, the pod drains and exits, and the supervisor restarts it onto the new value.
 
@@ -110,18 +110,18 @@ Argo syncs this chart through `yadgarhq/deploy`'s `infra/config-app.yaml`, at a 
 
 **Do not add the `yadgar-deployable` topic to this repository.** The ApplicationSet in `yadgarhq/argocd` selects repositories by that topic AND a `chart/` directory, and this repository has the directory. Adding the topic would mint a second Application for the same chart at sync wave 10 — after the modules that read it — and two Applications owning one set of ConfigMaps is a fight neither wins.
 
-**These ConfigMap names are reserved**: `shared`, `gateway`, `iam`, `task`, `iam-db`, `task-db`, `project-db`, `audit`, in namespace `yadgar`. No module chart renders a ConfigMap today, which is what makes the unprefixed names safe; a module chart that later renders one named after itself would collide with this repository.
+**These ConfigMap names are reserved**: `shared`, `gateway`, `iam`, `task`, `iam-db`, `task-db`, `project-db`, `audit`, `project`, in namespace `yadgar`. No module chart renders a ConfigMap today, which is what makes the unprefixed names safe; a module chart that later renders one named after itself would collide with this repository.
 
 ## Status
 
 | knob                          | reader                                                                      |
 | ----------------------------- | --------------------------------------------------------------------------- |
-| `tlsRotation.pollSeconds`     | `yadgar-lifecycle`, linked by all five services                             |
-| `tlsRotation.splayMaxSeconds` | `yadgar-lifecycle`, linked by all five services                             |
+| `tlsRotation.pollSeconds`     | `yadgar-lifecycle`, read by all six services                                |
+| `tlsRotation.splayMaxSeconds` | `yadgar-lifecycle`, read by all six services                                |
 | `audit.retentionDays`         | **none — awaiting its consumer.** The audit store is designed and not built |
 
 `project-db.yaml` is rendered and carries no knob at all: its first one is D53's project-path depth cap, and `project-db` ships with no compiled-in default standing in for it.
 
-The rotation knobs have a reader in the library and **no service reads them from here yet.** The five services pin `yadgar-lifecycle` by an immutable git tag, and the version that reads this repository has not been cut. The remaining work per service is a version bump, a call-site change, a volume and volume mount, and the deletion of the `tlsRotation` block from that service's own chart values.
+The rotation knobs have a reader in the library and **all six services read them from here.** `gateway`, `iam`, `task`, `iam-db`, `task-db` and `project-db` all pin `yadgar-lifecycle` `v0.2.3`, the version that reads this repository, and none of them carries a `tlsRotation` block in its own chart values any longer — that source was deleted once the cut-over landed.
 
-**That is TWO pull requests per service, in order, and the reason is mechanical rather than stylistic.** Argo takes a module's chart from the module repository at HEAD, so a chart change is live on merge; the image is pinned by digest in `yadgarhq/argocd`, written by a separate release pipeline minutes later. Deleting the environment variables in the same pull request that adds the file therefore rolls the pod onto the OLD binary with neither source present, and `Schedule::from_env` answers with the compiled-in default this repository exists to delete. So the first pull request ADDS the file and KEEPS the environment variables, and a second one deletes them once the release has landed in `yadgarhq/argocd`. `yadgarhq/deploy`'s `MIGRATION_NOTES.md` carries both, as steps 2a and 2b.
+**That was TWO pull requests per service, in order, and the reason was mechanical rather than stylistic.** Argo takes a module's chart from the module repository at HEAD, so a chart change is live on merge; the image is pinned by digest in `yadgarhq/argocd`, written by a separate release pipeline minutes later. Deleting the environment variables in the same pull request that added the file would have rolled the pod onto the OLD binary with neither source present, and the compiled-in default this repository exists to delete would have answered instead — `Schedule::from_env` was that fallback, and it no longer exists: `yadgar-lifecycle` deleted it, along with `from_lookup` and `DEFAULT_POLL`, at `v0.2.0`. So the first pull request added the file and kept the environment variables, and a second deleted them once the release had landed in `yadgarhq/argocd`. `yadgarhq/deploy`'s `MIGRATION_NOTES.md` carries both, as steps 2a and 2b, for the five services that had a fallback to delete; `project-db` shipped after the cut-over with the tag pinned from the start and nothing to remove.
