@@ -1,0 +1,20 @@
+# project.yaml — settings read only by `project`.
+#
+# **NO KNOB LIVES HERE YET.** See `gateway.yaml`. The file exists so the
+# ConfigMap is rendered and mounted from the module's first release, because
+# adding the mount later is a chart change that restarts the pod for no
+# functional reason.
+#
+# `yadgarhq/project` does not exist yet — this file lands ahead of it,
+# deliberately, so the mount is already there the day the first release ships,
+# the same way `project-db.yaml` landed ahead of `project-db`'s first release.
+#
+# WHAT BELONGS HERE: a value only `project` reads. What that value is is not
+# yet known — `project` has no code today — and ADR-0569 gives it this file
+# rather than a compiled-in default when it does.
+#
+# WHAT DOES NOT: anything every service reads with the same value. That goes
+# in `shared.yaml`. A key path may appear in exactly one file in this
+# directory and `scripts/one_source_per_knob.py` enforces it — there is no
+# merge and no precedence, because a value assembled from two files is a
+# value nobody wrote.
