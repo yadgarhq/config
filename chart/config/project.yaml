@@ -5,9 +5,9 @@
 # adding the mount later is a chart change that restarts the pod for no
 # functional reason.
 #
-# `yadgarhq/project` does not exist yet — this file lands ahead of it,
-# deliberately, so the mount is already there the day the first release ships,
-# the same way `project-db.yaml` landed ahead of `project-db`'s first release.
+# This file lands ahead of `project`'s first RELEASE, deliberately, so the
+# mount is already there the day it ships — the same way `project-db.yaml`
+# landed ahead of `project-db`'s first release.
 #
 # WHAT BELONGS HERE: a value only `project` reads. What that value is is not
 # yet known — `project` has no code today — and ADR-0569 gives it this file
