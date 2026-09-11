@@ -1,10 +1,5 @@
 # gateway.yaml — settings read only by `gateway`.
 #
-# **NO KNOB LIVES HERE YET.** The file exists so that the first one has an
-# obvious home, and so that `gateway` mounts the same two ConfigMaps every other
-# service does — its own and `shared`. An empty file renders an empty ConfigMap,
-# which is a mount that works rather than a volume that fails.
-#
 # WHAT BELONGS HERE: a value only `gateway` reads. Its rate-limit buckets, its
 # trusted-proxy hop count, its upstream timeouts — each of those is a gateway
 # setting and none of them is a setting for `iam`.
@@ -13,3 +8,20 @@
 # `shared.yaml`. A key path may appear in exactly one file in this directory and
 # `scripts/one_source_per_knob.py` enforces it — there is no merge and no
 # precedence, because a value assembled from two files is a value nobody wrote.
+
+# How often, in whole seconds, `gateway` tells an MCP client to re-poll
+# `tools/list` for a changed tool catalogue (see `yadgar-client`'s own poll
+# loop, which falls back to 600 on its own when a server names no interval —
+# so this knob is additive and nothing breaks if this change lands before or
+# after that client's).
+#
+# GATEWAY-ONLY, not `shared.yaml`, on `shared.yaml`'s own rule: only `gateway`
+# builds the `tools/list` response, so only `gateway` reads this. `iam`,
+# `task`, `iam-db`, `task-db` and `project-db` never touch it.
+#
+# THERE IS NO DEFAULT BEHIND THIS (ADR-0569). Delete the line and `gateway`
+# refuses to start, naming this file — see `yadgar_gateway::rotate::
+# GatewayDocument::tools_poll_interval` and its `no_compiled_in_defaults.sh`
+# gate.
+toolsPoll:
+  intervalSeconds: 600
