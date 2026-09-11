@@ -26,7 +26,7 @@ repos:
   # at first install and never re-resolves it, so a moving tag would silently
   # freeze each machine at whatever it meant the day it first ran.
   - repo: https://github.com/yadgarhq/actions
-    rev: v1.18.2
+    rev: v1.20.0
     hooks:
       - id: gitleaks
       - id: prettier
@@ -49,6 +49,7 @@ repos:
       # the guard closes rather than a state this check may report.
       - id: actionlint
       - id: helm-lint
+      - id: no-test-skips
 
   # LOCAL, because it encodes a rule about THIS repository's shape rather than a
   # rule the estate shares: a knob is defined in exactly one document, with no
