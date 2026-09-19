@@ -40,9 +40,12 @@ REPO = Path(__file__).resolve().parents[2]
 CHART = REPO / "chart"
 
 # THE RENDER OF THE SHIPPED CHART, pinned. Recomputed for the pull request that
-# deleted the seven per-service documents with at most one reader (ADR-0740) —
-# the render changes because there are fewer ConfigMaps to render, so the hash
-# has to change with it. Taken by running this file's own `render_sha256`
+# deleted the seven per-service documents with at most one reader (ADR-0740).
+# TWO THINGS CHANGE THE BYTES, not one: there are fewer ConfigMaps to render at
+# all, AND `chart/templates/configmap.yaml`'s own `metadata:` comment — rendered
+# into every surviving document too — was corrected for the smaller chart, so
+# `shared` and `audit` render with different bytes as well as `gateway` and the
+# rest rendering not at all. Taken by running this file's own `render_sha256`
 # against the edited chart, not transcribed.
 BASELINE_SHA256 = "6954cbbb6e77fd4bd2740c58d99832449ad6176ff29657746d221c45583ade27"
 
