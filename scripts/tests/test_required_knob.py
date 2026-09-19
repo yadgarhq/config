@@ -12,10 +12,17 @@ Declaring one in the shipped chart to make a test pass would make upstream's own
 `helm lint` unable to render its own chart — see `chart/consequential.yaml`.
 
 WHY A COPY RATHER THAN `--set` ALONE: the declaration and the schema move
-together. `chart/values.schema.json` is closed (`additionalProperties: false`), so
-a values key that is not a declared consequential knob is refused BEFORE the
-template runs. A case that sets a knob therefore has to open the schema for that
-knob too, which is precisely what a real declaring pull request does.
+together. `chart/values.schema.json` is closed (`additionalProperties: false`) at
+every level, so a values key the schema does not declare is refused BEFORE the
+template runs. A case that declares a knob therefore has to declare it in the
+schema too, which is precisely what a real declaring pull request does — and the
+fixture knob is one no document defines, so it is not simply an override of a
+chart default.
+
+WHAT THIS FILE IS NOT ABOUT: overriding a knob that HAS a default. That is
+ADR-0721's merge, and `test_values_merge.py` covers it against the shipped chart.
+Rule 2 is the case where there is no default to fall back on, and the whole of it
+is the refusal.
 
 MOST OF THIS FILE DEMANDS A REFUSAL. An interface proven only by its happy path is
 an interface that would pass whether the refusal worked or not, and the refusal is
@@ -170,12 +177,23 @@ def test_the_value_reaches_the_configmap_data(tmp_path):
     assert yaml.safe_load(rendered)["archive"]["bucketName"] == "yadgar-audit-archive"
 
 
-def test_the_copied_document_survives_the_append_whole(tmp_path):
-    """THE BYTE-FOR-BYTE COPY PROPERTY, which the append must not cost.
+def test_the_overridden_document_is_re_emitted_from_the_MERGED_data(tmp_path):
+    """WHAT A DECLARATION COSTS THE DOCUMENT IT BELONGS TO, and it is a cost.
 
-    `chart/config/audit.yaml` is mostly comments carrying the reasoning for its
-    number, and `kubectl get cm audit -o yaml` is where somebody debugging at 3am
-    reads them. An append that reformatted the document would take that away.
+    A consequential knob only arrives from a values file, so the document that
+    carries it always has an override — and under ADR-0721 an overridden document is
+    re-emitted from the merged data and LOSES its comments. `chart/config/audit.yaml`
+    is mostly the reasoning for its number, and `kubectl get cm audit -o yaml` stops
+    showing it for an installation that sets a knob in that file. ADR-0721 accepts
+    that deliberately: the reasoning still lives in the pinned chart version.
+
+    THE DEEP MERGE IS WHAT KEEPS THE REST OF THE DOCUMENT. `retentionDays` is not
+    declared here, so it is still the chart's own 90 — a whole-document replacement
+    would have dropped it, which is the alternative ADR-0721 rejected.
+
+    The other half of the split — a document with NO override staying byte-verbatim,
+    comments and all — is `test_values_merge.py`'s
+    `test_a_document_with_no_override_stays_BYTE_VERBATIM`.
     """
     copy = chart_copy(tmp_path, declare=FIXTURE_DECLARE, schema_properties=FIXTURE_SCHEMA)
     values = tmp_path / "values.yaml"
@@ -187,13 +205,99 @@ def test_the_copied_document_survives_the_append_whole(tmp_path):
 
     documents = [d for d in yaml.safe_load_all(result.stdout) if d]
     rendered = [d for d in documents if d["metadata"]["name"] == "audit"][0]["data"]["audit.yaml"]
-    original = (CHART / "config" / "audit.yaml").read_text()
-    # Every line of the original is still there, in order, unchanged — the append
-    # only adds. Trailing whitespace is stripped by the template on purpose, so
-    # the comparison is per-line right-stripped.
-    assert [line.rstrip() for line in original.splitlines()] == [
-        line.rstrip() for line in rendered.splitlines()[: len(original.splitlines())]
-    ]
+    assert [line for line in rendered.splitlines() if line.lstrip().startswith("#")] == []
+    parsed = yaml.safe_load(rendered)
+    assert parsed["archive"]["bucketName"] == "yadgar-audit-archive"
+    assert parsed["audit"]["retentionDays"] == 90
+
+
+# --------------------------- the per-leaf partition, at RENDER time rather than at commit
+
+
+SIBLING_DECLARE = {"shared": ["tlsRotation.pollSeconds"]}
+SIBLING_SCHEMA = {
+    "shared": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "tlsRotation": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "pollSeconds": {"type": "integer", "minimum": 1},
+                    "splayMaxSeconds": {"type": "integer", "minimum": 0},
+                },
+            }
+        },
+    }
+}
+
+
+def without_pollseconds(copy: Path) -> None:
+    """Rule 2 applied to the copy: the declared knob is DELETED from `chart/config/`.
+
+    Its sibling stays. That is what a real declaring pull request does under
+    ADR-0721's per-leaf partition, and up to 0.1.4 it was forbidden.
+    """
+    document = copy / "config" / "shared.yaml"
+    lines = [line for line in document.read_text().splitlines(keepends=True)
+             if not line.startswith("  pollSeconds:")]
+    document.write_text("".join(lines))
+
+
+def test_a_declared_knob_and_its_sibling_default_RENDER_into_one_mapping(tmp_path):
+    """THE CASE ADR-0720 REFUSED, AND IT REFUSED IT AT RENDER TIME.
+
+    Its ground was mechanical: the append wrote a top-level `tlsRotation:` mapping
+    into a document that already had one, which emits a DUPLICATE mapping key — a
+    ConfigMap that renders cleanly and that `serde_yaml` then refuses, so the reader
+    fails to boot on a document helm was happy with. `scripts/one_source_per_knob.py`
+    refused it at commit time and the template refused it at render time.
+
+    ADR-0721 replaces the append with a deep merge, and this is the case that proves
+    the refusal is gone rather than merely inverted in the gate: `pollSeconds` comes
+    from the values file, `splayMaxSeconds` from the chart, and they arrive under ONE
+    `tlsRotation` key. The gate-side half of this is
+    `test_one_source_per_knob.py::test_a_sibling_under_the_same_top_level_key_MAY_be_classified_differently`,
+    which proves nothing about what helm emits.
+    """
+    copy = chart_copy(tmp_path, declare=SIBLING_DECLARE, schema_properties=SIBLING_SCHEMA)
+    without_pollseconds(copy)
+    values = tmp_path / "values.yaml"
+    values.write_text("shared:\n  tlsRotation:\n    pollSeconds: 30\n")
+    result = helm("template", "ci-render", str(copy), "-f", str(values))
+    assert result.returncode == 0, result.stderr
+
+    import yaml
+
+    documents = [d for d in yaml.safe_load_all(result.stdout) if d]
+    rendered = [d for d in documents if d["metadata"]["name"] == "shared"][0]["data"]["shared.yaml"]
+    # ONE mapping key, not two. A duplicate would still parse here — PyYAML takes the
+    # last — so the count is asserted on the TEXT, which is what `serde_yaml` reads.
+    assert rendered.count("tlsRotation:") == 1, rendered
+    parsed = yaml.safe_load(rendered)
+    assert parsed["tlsRotation"]["pollSeconds"] == 30
+    assert parsed["tlsRotation"]["splayMaxSeconds"] == 300
+    assert "pollSeconds: 30\n" in rendered
+    assert "splayMaxSeconds: 300\n" in rendered
+
+
+def test_the_same_declaration_with_the_line_still_in_the_chart_is_refused(tmp_path):
+    """THE RED PAIR, and the rule the merge does NOT relax. Per leaf is still one
+    source per leaf: `tlsRotation.pollSeconds` declared consequential while
+    `chart/config/shared.yaml` still carries it is two writers for one value, and the
+    template refuses it naming the knob and the file.
+
+    This is the nested-path case; `test_a_knob_declared_consequential_and_also_in_chart_config_is_refused`
+    above is the same fault one level up.
+    """
+    copy = chart_copy(tmp_path, declare=SIBLING_DECLARE, schema_properties=SIBLING_SCHEMA)
+    values = tmp_path / "values.yaml"
+    values.write_text("shared:\n  tlsRotation:\n    pollSeconds: 30\n")
+    result = helm("template", "ci-render", str(copy), "-f", str(values))
+    assert result.returncode != 0
+    assert "tlsRotation.pollSeconds" in result.stderr
+    assert "shared.yaml" in result.stderr
 
 
 # ------------------------------------------------------- the ways it must refuse
@@ -221,9 +325,9 @@ PERMISSIVE_SCHEMA = {
 }
 
 
-def test_an_explicit_null_is_refused_rather_than_appended(tmp_path):
+def test_an_explicit_null_is_refused_rather_than_merged_in(tmp_path):
     """`hasKey` IS NOT ENOUGH. A key present with no value walks the dotted path
-    successfully, and appending it would write `bucketName: null` into the
+    successfully, and merging it would write `bucketName: null` into the
     ConfigMap — a value nobody chose, which is the whole class ADR-0569 exists to
     delete. Helm's `required` is what closes it, and this case is what keeps it
     there when the schema is not tight enough to have caught it first.
@@ -375,7 +479,7 @@ def test_the_example_values_file_changes_nothing():
 def test_the_shipped_declaration_list_is_empty():
     """MUTATION TRIPWIRE. `test_declaring_nothing_renders_the_baseline_byte_for_byte`
     above would also pass if the layering were deleted outright, and it would pass
-    if a knob were declared whose append happened to render identically. This case
+    if a knob were declared whose merge happened to render identically. This case
     pins the input the baseline claim is about.
     """
     import yaml

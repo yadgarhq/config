@@ -2,7 +2,7 @@
 
 The configuration a yadgar installation reads at boot.
 
-**An installation clones nothing** (ADR-0705). Upstream publishes this chart as a versioned OCI artifact, an organisation's own GitOps repository pins a version, and an upgrade is a version bump — see "Adopting this in your own installation" below. The values live here, in `chart/config/`: every setting is a line you can see, in a file you can diff, with the reasoning for its starting value written next to it.
+**An installation clones nothing and forks nothing** (ADR-0705, ADR-0721). Upstream publishes this chart as a versioned OCI artifact, an organisation's own GitOps repository pins a version, and an upgrade is a version bump — see "Adopting this in your own installation" below. The DEFAULTS live here, in `chart/config/`: every setting is a line you can see, in a file you can diff, with the reasoning for its starting value written next to it. An installation changes any one of them from its OWN repository, in one line, because each ConfigMap is rendered from a deep merge of the chart's document under that installation's values.
 
 It is a **Helm chart that renders ConfigMaps** and nothing else — no controller, no loader, no API. ADR-0570: where a capability can be expressed as a Helm chart, it is expressed as one, so configuration reuses the sync, the review gate, the rollback and the audit trail the estate already runs.
 
@@ -33,10 +33,11 @@ A third mechanism would put one concept in two places, which is the single-write
 
 ```
 chart/Chart.yaml                the chart
-chart/values.yaml               deliberately empty of settings — see the file for why
-chart/values.schema.json        the shape of the values it does read, and a refusal for every other key
-chart/consequential.yaml        which knobs carry NO default and come from the adopter — empty today
+chart/values.yaml               deliberately empty, and it must stay empty — see the file for why
+chart/values.schema.json        every knob an installation may set, typed, and a refusal for every other key
+chart/consequential.yaml        which knobs carry NO default at all — empty today
 chart/templates/configmap.yaml  one ConfigMap per file below, named after the file
+chart/templates/_merge.tpl      the deep merge that puts an installation's values over those files
 chart/config/shared.yaml        knobs every service reads, with the same value in each
 chart/config/gateway.yaml       knobs only `gateway` reads
 chart/config/iam.yaml           ... and so on, one file per service
@@ -53,7 +54,7 @@ scripts/one_source_per_knob.py  the gate below
 
 **Nothing enumerates the services.** `chart/templates/configmap.yaml` globs `config/*.yaml`, so adding a service is adding a file — the same property D54 buys for the module ApplicationSet one repository over.
 
-**The file an operator edits is the file a process reads**, byte for byte. `.Files.Get` copies the bytes and the template adds the indent a YAML block scalar requires and nothing else, so comments reach the cluster: `kubectl -n yadgar get cm shared -o yaml` shows the reasoning beside the number.
+**A document nobody overrides reaches the cluster byte for byte**, comments and all: `.Files.Get` copies the bytes and the template adds the indent a YAML block scalar requires and nothing else, so `kubectl -n yadgar get cm shared -o yaml` shows the reasoning beside the number. **A document an installation DOES override is re-emitted from the merged data and loses its comments** — the split is per document and it is ADR-0721's ruling rather than an optimisation. That is a real loss, accepted deliberately: comment preservation was a consequence of the operator editing these files, and under ADR-0705 they edit their own values file instead. The reasoning for an overridden knob still lives in the pinned chart version, which `helm template` prints.
 
 ### A knob lives in exactly one file
 
@@ -62,6 +63,8 @@ Either it is shared or it is per-service, never both. **There is no merge and no
 D34 already states this for prompts — resolution replaces, it does not merge — and gives the reason: merging layers produces a value nobody wrote and nobody can attribute to a source. A knob present in two files is two writers for one value, and it fails silently, because both files look authoritative.
 
 `scripts/one_source_per_knob.py` enforces it, as a pre-commit hook and therefore as part of `ci / passed`. If a knob genuinely needs a per-service override of a shared value, that is a design change to bring to the decision record, not something to reach by adding precedence.
+
+**An installation's own values file is not a second source**, and the distinction is the whole of ADR-0705's amendment. It states a value for a knob this chart DEFINES; it cannot introduce one, because `chart/values.schema.json` refuses a key the chart does not declare. So there is still one place a knob is defined and one place its default is written. The gate checks the partition across both sources that can DEFINE a knob — `chart/config/` and `chart/consequential.yaml` — per leaf.
 
 ### Blast radius
 
@@ -73,11 +76,13 @@ Editing `gateway.yaml` restarts `gateway`. **Editing `shared.yaml` restarts ever
 
 ADR-0705 splits defaults on exactly this criterion. A knob **may** carry a default in the pinned chart. A knob whose wrong value carries real consequence carries **no** default and is declared with Helm's `required`, so the sync fails naming the knob and the file.
 
-**That second half is built, and `chart/consequential.yaml` is where a knob is named.** A knob listed there carries no default anywhere: it is absent from `chart/config/`, the adopter states it in their own values file, and nothing renders until they do — ADR-0705's "the refusal moves from boot to sync". `chart/templates/configmap.yaml` appends the values-supplied keys to its verbatim copy of the document, so the value lands in the one file the reader opens.
+**Both halves are built, and they answer different questions.** `chart/values.schema.json` says which knobs an installation MAY set — all four of them — and `chart/consequential.yaml` says which carry no default to fall back on. A knob listed in the second carries no default anywhere: it is absent from `chart/config/`, the adopter states it in their own values file, and nothing renders until they do — ADR-0705's "the refusal moves from boot to sync". Either way `chart/templates/configmap.yaml` merges the installation's values into that document, so the value lands in the one file the reader opens.
 
 **An earlier attempt read the chart's own packaged documents instead, and it was cut before it merged.** Helm's `required` does work over `.Files.Get` then `fromYaml`, measured — but it inverts the guarantee ADR-0705 wants. A knob with no default is absent from `chart/config/`, so a refusal reading `chart/config/` fires for **everyone**: this repository's own `helm lint`, the reference cluster, every installation, permanently, with no way for an adopter to satisfy it. The only way to make it pass was to put the value back, at which point the knob has a default and is no longer the case the rule is about. The input source is the whole of the difference.
 
-**Two limits of the mechanism, both of them real.** The partition it can enforce is by **top-level key**, not by leaf: the append writes a top-level mapping into the copied document, so a top-level key that document already has would emit a duplicate mapping key, which `serde_yaml` refuses. A leaf-level partition would need a deep merge, and a merge would re-emit the document and take its comments away. So `tlsRotation.pollSeconds` cannot be declared while `tlsRotation.splayMaxSeconds` stays in `shared.yaml`; both move or neither does. And the moment the list is non-empty **this chart cannot render itself bare** — which is the point, and it lands on upstream too: `helm lint` and `ci / passed` must then be given `example/values.yaml` with the knob stated in it.
+**The partition is per leaf, since ADR-0721.** `tlsRotation.pollSeconds` may be declared consequential while `tlsRotation.splayMaxSeconds` keeps its default in `shared.yaml`; only the same leaf may not live in both sources. Up to chart 0.1.4 both had to move together, because the mechanism APPENDED the values-supplied keys to the copied document and a top-level key the document already held would have emitted a duplicate mapping key that `serde_yaml` refuses. The deep merge has no such restriction, and what it costs instead is the comments of a document an installation overrides.
+
+**One limit remains, and it is deliberate.** The moment the list is non-empty **this chart cannot render itself bare** — which is the point, and it lands on upstream too: `helm lint` and `ci / passed` must then be given `example/values.yaml` with the knob stated in it.
 
 **`chart/consequential.yaml` is empty. That is a classification, not an omission.** All four knobs this repository defines keep their shipped default:
 
@@ -94,11 +99,15 @@ ADR-0705 splits defaults on exactly this criterion. A knob **may** carry a defau
 
 **`audit.retentionDays` looks like the archetype and is not, because it has no reader at all.** The audit store is designed and not built, and ADR-0574 records that reader-less state as deliberate rather than an oversight. Declaring it `required` would force every installation to state a number nothing consumes: a refusal that protects nothing and fails syncs to do it. **Do not read the missing reader as a defect to fix by making the knob refuse.** When the audit module ships and reads this file, classify it again — D25 says an audit log with silent holes is worse than none, because it will be trusted, and a retention window only becomes consequential once something honours it.
 
-**The file a refusal names follows the delivery path.** The refusal that exists today is the boot-time one, raised by each knob's own reader, and a knob lives in `chart/config/<file>.yaml`, so that is the file its message names. ADR-0705's own delivery — the chart pinned as an OCI artifact, the values held in an organisation's own repository — **is now expressible**, and a consequential knob's refusal is raised by the chart at sync rather than by the reader at boot. Its message names the knob, the path to set it under in the adopter's values file, and the `chart/config/` document it belongs to, because that document is what the value is appended to and what the reader opens. **No knob takes that path today**, so every refusal that actually fires in this estate is still the boot-time one.
+**The file a refusal names follows the delivery path.** The refusal that exists today is the boot-time one, raised by each knob's own reader, and a knob lives in `chart/config/<file>.yaml`, so that is the file its message names. ADR-0705's own delivery — the chart pinned as an OCI artifact, the values held in an organisation's own repository — **is now expressible**, and a consequential knob's refusal is raised by the chart at sync rather than by the reader at boot. Its message names the knob, the path to set it under in the adopter's values file, and the `chart/config/` document it belongs to, because that document is what the value is merged into and what the reader opens. **No knob takes that path today**, so every refusal that actually fires in this estate is still the boot-time one.
 
-**This chart reads a Helm value for exactly the knobs `chart/consequential.yaml` declares, and that list is empty — so every key is still refused.** A key set in a values file, in an Argo Application's `helm.parameters`, or with `--set` reached nothing and reported success up to chart 0.1.1 — the silent no-op ADR-0569 exists to delete, one layer out. `chart/values.schema.json` is closed and declares no properties, so helm refuses the key by name in both `helm lint` and `helm template`.
+**This chart reads a Helm value for every knob it defines, and refuses every other key.** Two failures were shipped before this one worked. Up to chart 0.1.1 a key set in a values file, in an Argo Application's `helm.parameters`, or with `--set` reached nothing and reported success — the silent no-op ADR-0569 exists to delete, one layer out. Up to 0.1.4 it was refused in full, which sounds stricter and is worse: an adopter could clone nothing and also change nothing, which is ADR-0705's own rejected alternative built by accident. Now `chart/values.schema.json` declares the four knobs, typed, and `additionalProperties: false` at EVERY level refuses everything else by name in both `helm lint` and `helm template`.
 
-**The two files open together, knob by knob, and `additionalProperties: false` never opens at all.** A typed property with no declaration would pass an adopter's value and the chart would still ignore it, which is validation blessing inert input; a declared knob with no property is refused by the closed schema before the template runs, so the adopter meets an error about the key upstream told them to set. `scripts/one_source_per_knob.py` refuses both directions, and it counts a declared knob as a definition alongside `chart/config/`, so one-knob-one-source is checked across both sources rather than in the directory alone.
+**Closed at every level, not only at the root, and the reason is the merge.** The plausible mistake is not `foo`, it is `pollSecond` — and a typo one level down is an additional property of `tlsRotation` rather than of the root. Accepted, it would be MERGED into `shared.yaml` beside the knob it was meant to be: two keys, both looking set, one of them read.
+
+**`global` is declared and is not a knob.** Helm injects it into every subchart's values, so a closed schema that does not declare it makes this chart impossible to use as a DEPENDENCY — measured before it was declared: a parent chart holding it in `charts/` fails to render with no values supplied at all. ADR-0722's parent chart pinning every module chart needs it. It is typed as an object and left open inside, because its contents belong to the parent and to the other subcharts, and this chart reads nothing from it.
+
+**Per leaf, exactly one of two things supplies a knob, and the schema declares their union.** Either `chart/config/<stem>.yaml` carries a default for it, or `chart/consequential.yaml` declares it consequential and it carries no default anywhere. `scripts/one_source_per_knob.py` refuses all three ways that can break: a chart default with no property here (nobody can change it without forking the chart, which is the state ADR-0721 deletes), a declared knob with no property (the closed schema refuses the key upstream told them to set), and a property neither source supplies (unset, the document renders without the knob and the reader refuses to boot with nothing from this chart naming it).
 
 ## How a service reads this
 
@@ -151,35 +160,57 @@ two differ on purpose: that one follows `main` by a git path under D55, so a mer
 here reaches the reference cluster at once. That is right for the repository that
 owns the chart and wrong for an installation consuming it, which pins a version.
 
-`example/values.yaml` is the values file that goes beside it, and copying it
-changes nothing. **No knob requires a value today**, which is measured rather than
-claimed: that file is `{}`, and a render with it is byte-for-byte a render without
-it. It is there to show you the shape before you need it, and to be the file you
-already have when a future chart version declares its first consequential knob.
+`example/values.yaml` is the values file that goes beside it, and copying it as it
+stands changes nothing. **No knob requires a value today**, which is measured rather
+than claimed: that file is `{}`, and a render with it is byte-for-byte a render
+without it.
 
-**What you may set in it is exactly the knobs `chart/consequential.yaml` declares
-upstream, and nothing else.** Every other key is REFUSED by name —
-`helm template` and `helm lint --strict` both exit 1, and so does your sync. Up to
-chart 0.1.1 such a key was silently DROPPED instead: byte-identical output, exit 0,
-no warning. An ordinary knob is not settable here at all, and that is ADR-0705's
-split rather than an omission: a knob whose wrong value costs timing or load keeps
-its default in the pinned chart, and only a knob whose wrong value carries real
-consequence is lifted out of it. All four knobs are in the first category today.
+**What you may set in it is every knob this chart defines**, spelled with the config
+file's stem outermost:
+
+```yaml
+shared:
+  tlsRotation:
+    pollSeconds: 30
+```
+
+That one line changes that one number. You inherit the rest of `shared.yaml` from the
+chart version you pinned, including improvements to it, because the ConfigMap is
+rendered from a DEEP MERGE rather than from your file alone (ADR-0721). You clone
+nothing and you fork nothing.
+
+**Every other key is REFUSED by name** — `helm template` and `helm lint --strict`
+both exit 1, and so does your sync. That includes a typo in a real knob, because the
+schema is closed at every level: `pollSecond` is refused rather than merged in beside
+`pollSeconds`. Two earlier versions got this wrong in opposite directions: up to chart
+0.1.1 your file was silently DROPPED, and up to 0.1.4 it was refused in full, which
+left you unable to change anything at all.
+
+**What a knob you override costs you: the comments in that document.** A document you
+do not override reaches your cluster byte for byte, with the reasoning for each number
+beside it. A document you DO override is re-emitted from the merged data, so
+`kubectl get cm shared -o yaml` shows the values without the argument for them. The
+argument is in the chart version you pinned — `helm template` prints it.
 
 **How you learn a knob has become consequential: you bump `targetRevision` and the
-sync fails, naming the knob and the file.** An installation that needs a different
-value for an ordinary knob still changes it here, upstream, as a reviewed pull
-request.
+sync fails, naming the knob and the file.** A consequential knob carries no default
+anywhere, so nothing renders until you state it.
 
 To see exactly what a pinned version puts in your cluster:
 
 ```
-helm template config oci://ghcr.io/yadgarhq/charts/config --version 0.1.2
+helm template config oci://ghcr.io/yadgarhq/charts/config --version 0.1.5
 ```
 
 Not `helm show values` — that prints this chart's `values.yaml`, which is `{}` by
-design, so it answers "what do I inherit" with nothing. The knobs are in the files
-the template copies, and only a render shows them.
+design, so it answers "what do I inherit" with nothing. The defaults are in the files
+under `chart/config/`, and only a render shows them.
+
+**This chart also works as a SUBCHART**, which ADR-0722's parent chart needs. Helm
+injects a `global` key into every subchart's values, so `chart/values.schema.json`
+declares it: without that, a parent holding this chart in `charts/` fails to render
+with no values supplied at all. A parent states this installation's knobs under
+`config:`, then the knob's own path.
 
 ## Deployment
 
@@ -198,7 +229,7 @@ Argo syncs this chart through `yadgarhq/deploy`'s `infra/config-app.yaml`, at a 
 | `toolsPoll.intervalSeconds`   | `gateway`, which is the only service that builds the `tools/list` response  |
 | `audit.retentionDays`         | **none — awaiting its consumer.** The audit store is designed and not built |
 
-Every one of them carries its shipped default and none is declared with Helm's `required`; the classification and the reasoning for each are under "Blast radius" above.
+Every one of them carries its shipped default and none is declared with Helm's `required`; the classification and the reasoning for each are under "Blast radius" above. **All four are settable from an installation's own values file** — `chart/values.schema.json` declares each with a type, and the ConfigMap is rendered from a deep merge of the chart's document under those values (ADR-0721).
 
 `project-db.yaml` is rendered and carries no knob at all: its first one is D53's project-path depth cap, and `project-db` ships with no compiled-in default standing in for it.
 

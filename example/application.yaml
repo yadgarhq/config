@@ -9,43 +9,47 @@
 # That is right for the repository that OWNS the chart and wrong for an
 # installation that merely consumes it. An installation pins a version.
 #
-# WHAT YOU MAY OVERRIDE: exactly the knobs `chart/consequential.yaml` declares
-# upstream, AND THAT LIST IS EMPTY. So today every key you could set is refused, and
-# `example/values.yaml` beside this file is `{}` — copying it changes nothing, which
-# is measured rather than claimed.
+# WHAT YOU MAY OVERRIDE: every knob this chart defines, stated in your own values
+# file with the config file's stem outermost — `shared.tlsRotation.pollSeconds`,
+# `shared.tlsRotation.splayMaxSeconds`, `gateway.toolsPoll.intervalSeconds` and
+# `audit.audit.retentionDays`. The ConfigMap is rendered from a DEEP MERGE of the
+# chart's own document under what you state (ADR-0721), so one line changes one number
+# and you inherit the rest of that document from the version you pinned.
+# `example/values.yaml` beside this file is the shape, and as it stands it is `{}` —
+# copying it changes nothing, which is measured rather than claimed.
 #
-# EVERY OTHER KEY IS REFUSED BY NAME, and that is the feature. Up to 0.1.1 a values
-# file you passed was silently DROPPED — byte-identical output, exit 0, no warning.
-# From 0.1.2 a closed `values.schema.json` REFUSES it: `helm template` and `helm lint
-# --strict` both exit 1 naming your key, and so does your sync. A value whose effect
-# depends on which layer you inspect is the failure ADR-0569 exists to delete.
+# EVERY OTHER KEY IS REFUSED BY NAME, a typo in a real knob included, because
+# `values.schema.json` is closed at EVERY level. `helm template` and `helm lint
+# --strict` both exit 1 and so does your sync. Two earlier versions got this wrong in
+# opposite directions: up to 0.1.1 a values file you passed was silently DROPPED —
+# byte-identical output, exit 0, no warning — and from 0.1.2 to 0.1.4 it was refused
+# in FULL, so you could change nothing at all without forking the chart. A value whose
+# effect depends on which layer you inspect is the failure ADR-0569 exists to delete;
+# a knob you cannot change without a fork is the one ADR-0721 exists to delete.
 #
-# AN ORDINARY KNOB IS NOT SETTABLE HERE AT ALL, and that is ADR-0705's split rather
-# than an omission. A knob whose wrong value costs timing or load keeps its default
-# in the pinned chart; only a knob whose wrong value carries real CONSEQUENCE is
-# lifted out of it, and then it has no default anywhere and you must state it. All
-# four knobs this chart defines are in the first category today — the reasoning per
-# knob is in the chart repository's README, under "Blast radius". An installation
-# that needs a different value for one of those changes it upstream, as a reviewed
-# pull request, which is the same gate every other change in this estate passes.
+# WHAT AN OVERRIDE COSTS YOU: the comments in the document you override, and only that
+# one. A document you do not touch arrives byte for byte with the reasoning beside each
+# number; a document you DO override is re-emitted from the merged data, so it carries
+# the values without the argument for them. Render the pinned chart to read that.
 #
-# HOW YOU WILL LEARN A KNOB HAS BECOME CONSEQUENTIAL: you bump `targetRevision`
-# below and the sync FAILS, naming the knob and the file. ADR-0705 moves the refusal
-# from boot to sync deliberately, and that is why the version is a line you edit
-# rather than a range you track.
+# A KNOB WITH NO DEFAULT AT ALL is the one case where you MUST state a value:
+# `chart/consequential.yaml` upstream names those, and it is empty today. HOW YOU WILL
+# LEARN THAT CHANGED: you bump `targetRevision` below and the sync FAILS, naming the
+# knob and the file. ADR-0705 moves the refusal from boot to sync deliberately, and
+# that is why the version is a line you edit rather than a range you track.
 #
 # TO PASS A VALUES FILE you need Argo's MULTI-SOURCE form, because the chart comes
 # from a registry and the values file from your git repository. THE BLOCK BELOW IS
-# COMMENTED OUT ON PURPOSE and `spec.source` further down is live instead — there is
-# no knob to state today, so activating it buys nothing and a WRONG `$values` PATH
-# FAILS THE SYNC HARD. Uncomment it, delete `spec.source`, and fill in your own
-# repository the day a bump refuses.
+# COMMENTED OUT ON PURPOSE and `spec.source` further down is live instead — a WRONG
+# `$values` PATH FAILS THE SYNC HARD, so it stays inert until you have a file to point
+# it at. Uncomment it, delete `spec.source`, and fill in your own repository the day
+# you set your first knob.
 #
 #   spec:
 #     sources:
 #       - repoURL: ghcr.io/yadgarhq/charts
 #         chart: config
-#         targetRevision: 0.1.2
+#         targetRevision: 0.1.5
 #         helm:
 #           valueFiles:
 #             # $<ref> BELOW, NOT `$self`. The name is yours to choose and it has to
@@ -104,12 +108,16 @@ spec:
     # reaches you when you change this number, which is what a reference buys you
     # over a clone.
     #
-    # BARE SEMVER, no leading `v`. The git tag is `v0.1.2`; the chart version is
-    # `0.1.2`, because the release pipeline strips the `v` once and every published
+    # BARE SEMVER, no leading `v`. The git tag is `v0.1.5`; the chart version is
+    # `0.1.5`, because the release pipeline strips the `v` once and every published
     # artifact carries the bare form. `chart/Chart.yaml` in this repository still
     # reads `0.1.0` and that is not the version you get — nothing consumes it,
     # because the release packages with `--version` taken from the tag.
-    targetRevision: 0.1.2
+    #
+    # 0.1.5 IS THE FIRST VERSION THAT READS A VALUES FILE AT ALL. Pin 0.1.2 to 0.1.4
+    # and every key you set is refused by the schema; pin 0.1.1 or earlier and every
+    # key you set is silently dropped.
+    targetRevision: 0.1.5
   destination:
     server: https://kubernetes.default.svc
     # THE SERVICES' OWN NAMESPACE, and it has to be. A pod can only mount a

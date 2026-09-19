@@ -1,63 +1,71 @@
 # THE VALUES FILE AN ORGANISATION COMMITS BESIDE `application.yaml`, in its OWN
 # GitOps repository. Copy it there and point the Application at it.
 #
-# NO KNOB REQUIRES A VALUE TODAY, and that is measured rather than claimed: this
-# file is `{}` and `helm template ci-render chart -f example/values.yaml` renders
+# COPYING IT AS IT STANDS CHANGES NOTHING, and that is measured rather than claimed:
+# this file is `{}` and `helm template ci-render chart -f example/values.yaml` renders
 # byte-for-byte what the chart renders with no values at all.
-# `test_required_knob.py::test_the_example_values_file_changes_nothing` asserts
-# that against a pinned sha256, so the sentence above cannot quietly stop being
-# true.
+# `test_required_knob.py::test_the_example_values_file_changes_nothing` asserts that
+# against a pinned sha256, so the sentence above cannot quietly stop being true.
 #
-# So copying this file changes nothing, and that is the point. It is here to show
-# you the shape BEFORE you need it, and to be the file you already have when a
-# future chart version declares its first consequential knob.
+# ─── what you may set here ───────────────────────────────────────────────────
 #
-# ─── what you may set here, and what happens if you set anything else ────────
+# EVERY KNOB THIS CHART DEFINES, and nothing else. The outermost key is the config
+# file's stem and the rest is the knob's own path:
 #
-# EXACTLY THE KNOBS `chart/consequential.yaml` DECLARES UPSTREAM, and nothing
-# else. `chart/values.schema.json` is closed (`additionalProperties: false`), so
-# ANY other key is REFUSED by name — `helm template` and `helm lint --strict` both
-# exit 1, and so does your Argo sync.
+#   shared:
+#     tlsRotation:
+#       pollSeconds: 30
 #
-# THAT REFUSAL IS THE FEATURE. Up to chart 0.1.1 a values file you passed was
-# silently DROPPED: byte-identical output, exit 0, no warning, and nothing anywhere
-# saying your number had no effect. A value whose effect depends on which layer you
-# inspect is the failure ADR-0569 exists to delete, and a values file is one more
-# layer to inspect. So a key with no reader is refused rather than blessed.
-#
-# ORDINARY KNOBS ARE NOT SETTABLE HERE AT ALL, and that is ADR-0705's split rather
-# than an omission. A knob whose wrong value costs timing or load keeps its default
-# in the pinned chart, where `helm template` shows it to you with the reasoning
-# written beside it. Only a knob whose wrong value carries real CONSEQUENCE is
-# lifted out of the chart, and then it has no default anywhere and you must state
-# it. All four knobs this chart defines are in the first category today; the
-# reasoning per knob is in the README, under "Blast radius also decides which knobs
-# carry a default".
-#
-# TO SEE WHAT YOU INHERIT, render the version you pinned:
-#
-#   helm template config oci://ghcr.io/yadgarhq/charts/config --version 0.1.2
-#
-# Not `helm show values` — that prints the chart's own `values.yaml`, which is `{}`
-# by design, so it answers "what do I inherit" with nothing.
-#
-# ─── the shape, when there is something to state ─────────────────────────────
-#
-# The OUTERMOST key is the config file's stem and the rest is the knob's own path,
-# spelled exactly as `chart/consequential.yaml` declares it. So a consequential
-# `archive.bucketName` belonging to `chart/config/audit.yaml` reads:
+#   gateway:
+#     toolsPoll:
+#       intervalSeconds: 120
 #
 #   audit:
-#     archive:
-#       bucketName: yadgar-audit-archive
+#     audit:
+#       retentionDays: 30
 #
-# and the chart appends those keys to its verbatim copy of `audit.yaml`, so the
-# value lands in the one document `audit` actually opens.
+# The ConfigMap is rendered from a DEEP MERGE of the chart's own document under what
+# you state (ADR-0721), so the line above changes `pollSeconds` and leaves
+# `splayMaxSeconds` at the chart's own 300 — including a value upstream improves in a
+# later version. You clone nothing and you fork nothing.
 #
-# HOW YOU LEARN A KNOB HAS BECOME CONSEQUENTIAL: you bump `targetRevision` and the
-# sync FAILS, naming the knob and the file. That is deliberate — ADR-0705 moves the
-# refusal from boot to sync — and it is why the version bump is a line you edit
-# rather than a range you track.
+# `helm show values` DOES NOT ANSWER "WHAT DO I INHERIT" — it prints the chart's own
+# `values.yaml`, which is `{}` by design. Render the version you pinned instead:
+#
+#   helm template config oci://ghcr.io/yadgarhq/charts/config --version 0.1.5
+#
+# ─── what happens if you set anything else ───────────────────────────────────
+#
+# IT IS REFUSED BY NAME. `chart/values.schema.json` is closed
+# (`additionalProperties: false`) at EVERY level, so `helm template` and
+# `helm lint --strict` exit 1 and so does your Argo sync. That includes a TYPO IN A
+# REAL KNOB: `pollSecond` is refused rather than merged in beside `pollSeconds`,
+# where both would look set and one would be read.
+#
+# THAT REFUSAL IS THE FEATURE, and two earlier versions got it wrong in opposite
+# directions. Up to chart 0.1.1 a values file you passed was silently DROPPED:
+# byte-identical output, exit 0, no warning, and nothing anywhere saying your number
+# had no effect. From 0.1.2 to 0.1.4 it was refused in FULL, which sounds stricter and
+# is worse — you could change nothing at all without forking the chart. From 0.1.5 the
+# knobs are declared, typed, and everything else is still refused.
+#
+# ─── what an override costs you ──────────────────────────────────────────────
+#
+# THE COMMENTS IN THE DOCUMENT YOU OVERRIDE, and only that document. A document you
+# do not touch reaches your cluster byte for byte, so `kubectl -n yadgar get cm audit
+# -o yaml` still shows the reasoning beside each number. A document you DO override is
+# re-emitted from the merged data, so it carries the values without the argument for
+# them, and its keys are sorted rather than in the chart's order. The argument is in
+# the chart version you pinned; render it.
+#
+# ─── a knob with NO default ──────────────────────────────────────────────────
+#
+# A knob whose wrong value carries real consequence carries no default anywhere
+# (ADR-0705 rule 2). Upstream names it in `chart/consequential.yaml` — WHICH IS EMPTY
+# TODAY — and then nothing renders until you state it. HOW YOU LEARN THAT HAPPENED:
+# you bump `targetRevision` and the sync FAILS, naming the knob and the file. That is
+# deliberate, and it is why the version is a line you edit rather than a range you
+# track.
 #
 # ─── one trap, measured ──────────────────────────────────────────────────────
 #
@@ -66,8 +74,8 @@
 # followed by a stray top-level key — which PyYAML rejects outright with a
 # ParserError — rendered the chart's own defaults and exited 0, silently.
 #
-# So if a version bump refuses a knob you believe you set, PARSE YOUR FILE before
-# you doubt the chart:
+# So if a knob you believe you set has no effect, PARSE YOUR FILE before you doubt
+# the chart:
 #
 #   python3 -c 'import sys,yaml; yaml.safe_load(open(sys.argv[1]))' values.yaml
 #
