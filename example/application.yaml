@@ -1,0 +1,81 @@
+# WHAT AN ORGANISATION COMMITS TO ITS OWN GitOps REPOSITORY. Copy this file into
+# your repository, pin the version you want, and you have this installation's
+# configuration. You clone nothing and you never fork the chart (ADR-0705).
+#
+# This file is a REFERENCE, not a live manifest. Nothing in this repository syncs
+# it — `yadgarhq/deploy`'s own `infra/config-app.yaml` is what deploys config into
+# the reference installation. The two differ on purpose: that one tracks `main` by
+# a git path under D55, so a merge here reaches the reference cluster immediately.
+# That is right for the repository that OWNS the chart and wrong for an
+# installation that merely consumes it. An installation pins a version.
+#
+# YOU CANNOT OVERRIDE A SETTING AT CHART 0.1.0, and you should know that before you
+# try. This chart has NO Helm values interface: `chart/templates/configmap.yaml`
+# copies `chart/config/*.yaml` verbatim out of the packaged artifact with
+# `.Files.Get`, and `grep '.Values' chart/` finds nothing. So `helm ... -f
+# your-values.yaml` renders BYTE-IDENTICAL output and exits 0 — it does not warn,
+# it does not fail, it simply has no effect. There is deliberately no values file
+# beside this one, because a values file here would teach you a mechanism that does
+# not exist.
+#
+# That is ADR-0705's remaining half, named rather than papered over. The ruling
+# says an organisation supplies its own values and that a consequential knob
+# carries no default but Helm's `required` instead. Neither is built: `required`
+# needs a `.Values` reference, and adding one reverses this chart's stated
+# byte-for-byte copy property. Until that is ruled on, an installation that needs a
+# different value changes it HERE, upstream, as a reviewed pull request — which is
+# the same gate every other change in this estate passes.
+#
+# THE SCHEME-LESS `repoURL` IS DELIBERATE. Argo auto-enables OCI for a Helm source
+# whose `repoURL` carries no scheme, which is why `chart:` sits beside it. The
+# explicit `oci://` form also works but takes `path: .` instead of `chart:`, and
+# the two must not be mixed — `yadgarhq/deploy`'s `infra/envoy-gateway.yaml` says
+# so at the site where it chose the other one.
+#
+# NO REPOSITORY SECRET, because the package is public and an anonymous pull is
+# what every installation does. Measured: an anonymous token request for
+# `yadgarhq/charts/config` succeeds and the manifest answers 200. Three
+# Applications in the reference deployment already pull public OCI charts with no
+# credential at all. If Argo ever reports `DENIED` or a 403 here, the package is
+# private rather than absent — GHCR answers the same way for both — and the fix is
+# one visibility flip by whoever owns the registry, not a Secret.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: config
+  # ARGO'S namespace, not the workload's. `destination.namespace` below is where
+  # the ConfigMaps land.
+  namespace: argocd
+  annotations:
+    # BEFORE THE SERVICES THAT MOUNT THESE. A ConfigMap volume is
+    # `optional: false` by default, so a pod whose ConfigMap has not synced yet
+    # does not fail — it sits in `ContainerCreating` indefinitely. That is the
+    # intended outcome when a ConfigMap is genuinely absent and a stuck
+    # installation when it is merely late, so this is ordering rather than
+    # preference. The modules are at wave 10.
+    argocd.argoproj.io/sync-wave: "-12"
+spec:
+  # CHANGE THIS if your Argo uses a project other than `default`.
+  project: default
+  source:
+    repoURL: ghcr.io/yadgarhq/charts
+    chart: config
+    # EDIT THIS, and bump it deliberately. This is the line an upgrade moves, and
+    # at 0.1.0 it is the only thing that changes what you get — the chart improves
+    # upstream and reaches you when you change this number, which is what a
+    # reference buys you over a clone.
+    #
+    # BARE SEMVER, no leading `v`. The git tag is `v0.1.0`; the chart version is
+    # `0.1.0`, because the release pipeline strips the `v` once and every
+    # published artifact carries the bare form.
+    targetRevision: 0.1.0
+  destination:
+    server: https://kubernetes.default.svc
+    # THE SERVICES' OWN NAMESPACE, and it has to be. A pod can only mount a
+    # ConfigMap from the namespace it runs in, so the configuration for `yadgar`
+    # cannot live anywhere else. EDIT THIS if your services do not run in a
+    # namespace called `yadgar`.
+    namespace: yadgar
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]
