@@ -58,4 +58,19 @@
 # sync FAILS, naming the knob and the file. That is deliberate — ADR-0705 moves the
 # refusal from boot to sync — and it is why the version bump is a line you edit
 # rather than a range you track.
+#
+# ─── one trap, measured ──────────────────────────────────────────────────────
+#
+# HELM DOES NOT TELL YOU A VALUES FILE IS MALFORMED. It reads what it can and
+# renders: measured on helm 3.18.4 and 4.2.3, a file this very comment block
+# followed by a stray top-level key — which PyYAML rejects outright with a
+# ParserError — rendered the chart's own defaults and exited 0, silently.
+#
+# So if a version bump refuses a knob you believe you set, PARSE YOUR FILE before
+# you doubt the chart:
+#
+#   python3 -c 'import sys,yaml; yaml.safe_load(open(sys.argv[1]))' values.yaml
+#
+# This repository's own `check-yaml` pre-commit hook covers the files here. Nothing
+# upstream can cover yours, which is why it is written down rather than assumed.
 {}

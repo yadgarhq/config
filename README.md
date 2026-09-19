@@ -2,7 +2,7 @@
 
 The configuration a yadgar installation reads at boot.
 
-This repository is a **template**. Clone it, edit the values in `chart/config/`, and point Argo at it: that is the whole of configuring an installation. Every setting is a line you can see, in a file you can diff, with the reasoning for its starting value written next to it.
+**An installation clones nothing** (ADR-0705). Upstream publishes this chart as a versioned OCI artifact, an organisation's own GitOps repository pins a version, and an upgrade is a version bump — see "Adopting this in your own installation" below. The values live here, in `chart/config/`: every setting is a line you can see, in a file you can diff, with the reasoning for its starting value written next to it.
 
 It is a **Helm chart that renders ConfigMaps** and nothing else — no controller, no loader, no API. ADR-0570: where a capability can be expressed as a Helm chart, it is expressed as one, so configuration reuses the sync, the review gate, the rollback and the audit trail the estate already runs.
 
