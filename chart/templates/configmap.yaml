@@ -21,9 +21,125 @@ before somebody tries to make a knob depend on a Helm value.
 
 MAPS RANGE IN KEY ORDER in Go templates, so the rendered output is stable and a
 `helm template` diff shows only what actually changed.
+
+CONSEQUENTIAL KNOBS ARE THE ONE EXCEPTION, AND `chart/consequential.yaml` LISTS
+THEM. That list is empty today, so every branch below is inert and the render is
+byte-identical to the copy-only form — which is asserted, not hoped for, by
+`test_declaring_nothing_renders_the_baseline_byte_for_byte`. A knob named there
+carries NO default under ADR-0705 rule 2: it is absent from `config/`, it comes
+from the adopter's own values file, and nothing renders until they state it.
+
+IT APPENDS, IT DOES NOT MERGE, and the reader is why. A service mounts the
+ConfigMap as a directory and opens ONE named path, so a values-supplied knob has
+to land IN that document — a second key or a second ConfigMap would be a file
+nothing opens. Appending keeps the copy byte-for-byte and keeps its comments; a
+deep merge would re-emit the document through `toYaml` and take both away. The
+cost is that the partition is by TOP-LEVEL KEY rather than by leaf, which is
+stated at the refusal below and in `chart/consequential.yaml`.
 */}}
-{{- range $path, $_ := .Files.Glob "config/*.yaml" }}
+{{- /*
+THE DECLARATION LIST, read once. `default dict` covers both an absent file and a
+comments-only one, and absence means NOTHING IS DECLARED — which is the same
+posture as the empty `{}` the file ships with, rather than a failure that would
+make deleting the file a way to turn the gate off quietly.
+`scripts/one_source_per_knob.py` is what refuses the list and the schema
+disagreeing, in either direction.
+*/}}
+{{- $files := .Files.Glob "config/*.yaml" }}
+{{- $declared := (.Files.Get "consequential.yaml" | fromYaml) | default dict }}
+{{- /*
+A DECLARED STEM WITH NO DOCUMENT RENDERS NOTHING. The adopter would state the
+value, the schema would accept it, and no ConfigMap would carry it — the silent
+no-op this chart's schema was closed to delete. Caught here because the loop
+below is driven by the files rather than by the list, so it could not notice.
+
+THE STEM SET IS BUILT BY RANGING rather than asked of the glob directly:
+`.Files.Glob` hands back helm's own `engine.files`, not a `map[string]interface{}`,
+so `hasKey` on it fails the render with a type error rather than answering.
+`range` over it works, which is what the loop below has always relied on.
+*/}}
+{{- $stems := dict }}
+{{- range $path, $_ := $files }}
+{{-   $stems = set $stems (trimSuffix ".yaml" (base $path)) true }}
+{{- end }}
+{{- range $stem, $_ := $declared }}
+{{-   if not (hasKey $stems $stem) }}
+{{-     fail (printf "chart/consequential.yaml declares knobs for `%s`, but chart/config/%s.yaml does not exist. Nothing would render the value an adopter set." $stem $stem) }}
+{{-   end }}
+{{- end }}
+{{- range $path, $_ := $files }}
 {{- $file := base $path }}
+{{- $body := $.Files.Get $path }}
+{{- $knobs := (index $declared (trimSuffix ".yaml" $file)) | default list }}
+{{- if $knobs }}
+{{- /*
+RULE 1 FIRST, before anything asks for a value. A knob declared consequential is
+ABSENT from `config/` — ADR-0705 amends ADR-0569 on the ORIGIN of a value only.
+This runs even with no values file at all, so a repository-internal fault is
+reported as itself rather than as a missing adopter value.
+
+THE CHECK IS ON THE TOP-LEVEL KEY and that is the limit of the mechanism, not an
+approximation of a finer one. The append writes a top-level mapping into the
+copied document, so a top-level key the document already has produces a DUPLICATE
+mapping key — a ConfigMap that renders cleanly and that `serde_yaml` then refuses
+to parse, which is a worse failure than either half. Both knobs under one parent
+move together or neither moves.
+*/}}
+{{-   $parsed := (fromYaml $body) | default dict }}
+{{-   $supplied := (index $.Values (trimSuffix ".yaml" $file)) | default dict }}
+{{-   $extra := dict }}
+{{-   range $knob := $knobs }}
+{{-     $segments := splitList "." $knob }}
+{{-     $top := first $segments }}
+{{-     if hasKey $parsed $top }}
+{{-       fail (printf "`%s` is declared consequential in chart/consequential.yaml, so it carries no default — but chart/config/%s already defines `%s` at the top level. A knob has one source (ADR-0569, upheld by ADR-0705), and appending `%s` to a document that already has it would emit a duplicate mapping key. Delete it from chart/config/%s, together with every sibling under `%s`." $knob $file $top $top $file $top) }}
+{{-     end }}
+{{- /*
+THE WALK, and `hasKey` at every step rather than `dig`. `dig` cannot take a
+run-time list of keys, and a plain `index` down a path returns nil for "absent"
+and nil for "present and null" alike — the first is a refusal naming the knob, the
+second is caught by `required` below. Separating them is what lets the message
+name the knob and the file, which is the message ADR-0705 asks for in those words.
+*/}}
+{{-     $node := $supplied }}
+{{-     $found := true }}
+{{-     range $segment := $segments }}
+{{-       if and $found (kindIs "map" $node) (hasKey $node $segment) }}
+{{-         $node = index $node $segment }}
+{{-       else }}
+{{-         $found = false }}
+{{-       end }}
+{{-     end }}
+{{-     $message := printf "`%s` carries no default and must be set in your own values file, under `%s.%s`. It belongs in chart/config/%s, and this chart will not render until you state it (ADR-0705)." $knob (trimSuffix ".yaml" $file) $knob $file }}
+{{-     if not $found }}
+{{-       fail $message }}
+{{-     end }}
+{{- /*
+`required` ON TOP OF THE WALK, because `hasKey` is true for a key present with no
+value. `bucketName:` with nothing after it would otherwise append
+`bucketName: null` — a value nobody chose, which is the class ADR-0569 exists to
+delete rather than a shape to tolerate. `values.schema.json` usually refuses it
+first; usually is not a guarantee, and this does not depend on the schema being
+tight.
+*/}}
+{{-     $leaf := required $message $node }}
+{{-     $built := $leaf }}
+{{-     range $segment := reverse $segments }}
+{{-       $built = dict $segment $built }}
+{{-     end }}
+{{-     $extra = mergeOverwrite $extra $built }}
+{{-   end }}
+{{- /*
+THE APPEND, and the `trimSuffix` is the safety. A top-level key at column 0 after
+deeper-indented content is valid YAML and closes whatever was open above it, so
+the structure needs nothing else — but a document with no trailing newline would
+otherwise have the first appended key concatenated onto its last line. Trimming
+one newline and writing one back makes the boundary exactly one newline either
+way. A document with no trailing newline never reaches here in this repository
+(`end-of-file-fixer` runs on every commit) and the append does not rely on that.
+*/}}
+{{-   $body = printf "%s\n%s" (trimSuffix "\n" $body) (toYaml $extra) }}
+{{- end }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -52,6 +168,20 @@ data:
   # write trailing whitespace into the mounted file and make it differ from the
   # file in this repository for no reason anybody could see. The regex takes those
   # back off, so what a process reads is what an operator wrote, plus an indent.
+{{- /*
+THIS COMMENT IS RENDERED INTO THE CONFIGMAP, so the line above is deliberately
+UNCHANGED: it is true of every document this chart ships, and editing it would
+change the rendered bytes of all nine for no operator-visible gain. The qualifier
+it needs is emitted only for a document that actually has one, so the day a knob
+is declared the ConfigMap says so and today's render is untouched.
+*/}}
+{{- if $knobs }}
+  #
+  # AND THE CONSEQUENTIAL KNOBS APPENDED AT THE END OF THIS DOCUMENT, which came
+  # from this installation's own values file rather than from `chart/config/`. They
+  # carry no default anywhere: ADR-0705 rule 2, and `chart/consequential.yaml`
+  # upstream is the list that says which knobs those are.
+{{- end }}
   {{ $file }}: |
-{{ regexReplaceAll "(?m)[ \t]+$" (indent 4 ($.Files.Get $path)) "" }}
+{{ regexReplaceAll "(?m)[ \t]+$" (indent 4 $body) "" }}
 {{- end }}

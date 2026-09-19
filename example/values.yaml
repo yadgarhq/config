@@ -1,0 +1,61 @@
+# THE VALUES FILE AN ORGANISATION COMMITS BESIDE `application.yaml`, in its OWN
+# GitOps repository. Copy it there and point the Application at it.
+#
+# NO KNOB REQUIRES A VALUE TODAY, and that is measured rather than claimed: this
+# file is `{}` and `helm template ci-render chart -f example/values.yaml` renders
+# byte-for-byte what the chart renders with no values at all.
+# `test_required_knob.py::test_the_example_values_file_changes_nothing` asserts
+# that against a pinned sha256, so the sentence above cannot quietly stop being
+# true.
+#
+# So copying this file changes nothing, and that is the point. It is here to show
+# you the shape BEFORE you need it, and to be the file you already have when a
+# future chart version declares its first consequential knob.
+#
+# ─── what you may set here, and what happens if you set anything else ────────
+#
+# EXACTLY THE KNOBS `chart/consequential.yaml` DECLARES UPSTREAM, and nothing
+# else. `chart/values.schema.json` is closed (`additionalProperties: false`), so
+# ANY other key is REFUSED by name — `helm template` and `helm lint --strict` both
+# exit 1, and so does your Argo sync.
+#
+# THAT REFUSAL IS THE FEATURE. Up to chart 0.1.1 a values file you passed was
+# silently DROPPED: byte-identical output, exit 0, no warning, and nothing anywhere
+# saying your number had no effect. A value whose effect depends on which layer you
+# inspect is the failure ADR-0569 exists to delete, and a values file is one more
+# layer to inspect. So a key with no reader is refused rather than blessed.
+#
+# ORDINARY KNOBS ARE NOT SETTABLE HERE AT ALL, and that is ADR-0705's split rather
+# than an omission. A knob whose wrong value costs timing or load keeps its default
+# in the pinned chart, where `helm template` shows it to you with the reasoning
+# written beside it. Only a knob whose wrong value carries real CONSEQUENCE is
+# lifted out of the chart, and then it has no default anywhere and you must state
+# it. All four knobs this chart defines are in the first category today; the
+# reasoning per knob is in the README, under "Blast radius also decides which knobs
+# carry a default".
+#
+# TO SEE WHAT YOU INHERIT, render the version you pinned:
+#
+#   helm template config oci://ghcr.io/yadgarhq/charts/config --version 0.1.2
+#
+# Not `helm show values` — that prints the chart's own `values.yaml`, which is `{}`
+# by design, so it answers "what do I inherit" with nothing.
+#
+# ─── the shape, when there is something to state ─────────────────────────────
+#
+# The OUTERMOST key is the config file's stem and the rest is the knob's own path,
+# spelled exactly as `chart/consequential.yaml` declares it. So a consequential
+# `archive.bucketName` belonging to `chart/config/audit.yaml` reads:
+#
+#   audit:
+#     archive:
+#       bucketName: yadgar-audit-archive
+#
+# and the chart appends those keys to its verbatim copy of `audit.yaml`, so the
+# value lands in the one document `audit` actually opens.
+#
+# HOW YOU LEARN A KNOB HAS BECOME CONSEQUENTIAL: you bump `targetRevision` and the
+# sync FAILS, naming the knob and the file. That is deliberate — ADR-0705 moves the
+# refusal from boot to sync — and it is why the version bump is a line you edit
+# rather than a range you track.
+{}

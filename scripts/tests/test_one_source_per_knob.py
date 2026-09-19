@@ -23,12 +23,61 @@ monkeypatched and the script needs no argument it does not already have.
 Run: python3 -m pytest scripts/tests/ -q
 """
 
+import json
 import subprocess
 import sys
 from pathlib import Path
 
 GATE = Path(__file__).resolve().parents[1] / "one_source_per_knob.py"
 REPO = Path(__file__).resolve().parents[2]
+
+
+def declare(root: Path, declaration, schema_properties=None, *, closed=True):
+    """Write ADR-0705's second source: the declaration list and the schema.
+
+    `declaration` is written verbatim when it is a string, so a case can plant a
+    malformed one. Otherwise it is dumped as JSON, which every YAML parser reads.
+
+    `schema_properties` defaults to a schema DERIVED from the declaration, so a
+    case about one rule does not trip the agreement rule by accident. The cases
+    about the agreement pass their own.
+    """
+    chart = root / "chart"
+    chart.mkdir(parents=True, exist_ok=True)
+    if isinstance(declaration, str):
+        (chart / "consequential.yaml").write_text(declaration)
+        parsed = {}
+    else:
+        (chart / "consequential.yaml").write_text(json.dumps(declaration or {}) + "\n")
+        parsed = declaration or {}
+
+    if schema_properties is None:
+        schema_properties = {}
+        for stem, knobs in parsed.items():
+            node = schema_properties.setdefault(
+                stem, {"type": "object", "additionalProperties": False, "properties": {}}
+            )
+            for knob in knobs if isinstance(knobs, list) else []:
+                cursor = node
+                segments = str(knob).split(".")
+                for segment in segments[:-1]:
+                    cursor = cursor["properties"].setdefault(
+                        segment,
+                        {"type": "object", "additionalProperties": False, "properties": {}},
+                    )
+                cursor["properties"][segments[-1]] = {}
+    (chart / "values.schema.json").write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "additionalProperties": not closed,
+                "properties": schema_properties,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    return root
 
 
 def layout(tmp_path: Path, **files):
@@ -179,3 +228,169 @@ def test_this_repository_has_one_source_per_knob_today(tmp_path):
     """The real tree, not a fixture, so the suite is also the gate's own run."""
     result = run(REPO)
     assert result.returncode == 0, result.stdout
+
+
+# ------------------------------- ADR-0705's SECOND source, and the rule across both
+#
+# A consequential knob comes from the ADOPTER's values file rather than from
+# `chart/config/`, declared in `chart/consequential.yaml`. ADR-0705 amends ADR-0569
+# on the ORIGIN of a value only and upholds one-knob-one-source, so the partition
+# has to hold across BOTH sources — and `chart/config/` alone cannot see half of it.
+# A gate that checked only the directory would read as full coverage while missing
+# the newer half, which is worse than not checking at all.
+
+
+def test_both_new_files_absent_means_nothing_is_declared(tmp_path):
+    """ABSENCE IS NOT A FAULT, and every case above depends on it: they lay out
+    `chart/config/` alone. Deleting the declaration is still not a way to switch
+    this off quietly — the agreement check below refuses a schema that names a knob
+    the declaration does not.
+    """
+    root = layout(tmp_path, shared="logLevel: info\n")
+    result = run(root)
+    assert result.returncode == 0, result.stdout
+    assert "0 of them carry no default" in result.stdout
+
+
+def test_the_same_knob_declared_and_also_in_chart_config_is_refused(tmp_path):
+    """THE CROSS-SOURCE COLLISION, which is the whole reason this gate had to learn
+    the second source. Two writers for one value, and `chart/config/` alone cannot
+    see it.
+    """
+    root = layout(tmp_path, audit="retention:\n  days: 90\n")
+    declare(root, {"audit": ["retention.days"]})
+    result = run(root)
+    assert result.returncode == 1
+    assert "`retention.days` is defined in 2 files" in result.stdout
+    assert "chart/consequential.yaml" in result.stdout
+    assert "chart/config/audit.yaml" in result.stdout
+
+
+def test_a_sibling_under_the_same_top_level_key_is_refused(tmp_path):
+    """THE PARTITION IS BY TOP-LEVEL KEY, NOT BY LEAF, and this is the case that
+    says so. There is no leaf collision here — `pollSeconds` is in one source and
+    `splayMaxSeconds` in the other — but the chart APPENDS a top-level
+    `tlsRotation:` mapping to a document that already has one, which emits a
+    duplicate mapping key that `serde_yaml` refuses. So the first realistic
+    consequential knob in this repository cannot be declared alone; both knobs
+    under `tlsRotation` move or neither does.
+    """
+    root = layout(tmp_path, shared="tlsRotation:\n  splayMaxSeconds: 300\n")
+    declare(root, {"shared": ["tlsRotation.pollSeconds"]})
+    result = run(root)
+    assert result.returncode == 1
+    assert "`tlsRotation.pollSeconds` is declared consequential" in result.stdout
+    assert "TOP-LEVEL KEY, not by leaf" in result.stdout
+    # The message names the siblings, so the reader does not have to go and find
+    # what else has to move.
+    assert "tlsRotation.splayMaxSeconds" in result.stdout
+
+
+def test_a_declared_stem_with_no_document_is_refused(tmp_path):
+    """A DECLARATION NOTHING RENDERS. The adopter states the value, the schema
+    accepts it, and no ConfigMap carries it.
+    """
+    root = layout(tmp_path, shared="logLevel: info\n")
+    declare(root, {"nosuchservice": ["a.b"]})
+    result = run(root)
+    assert result.returncode == 1
+    assert "does not exist" in result.stdout
+    assert "nosuchservice" in result.stdout
+
+
+def test_a_declared_knob_with_no_schema_property_is_refused(tmp_path):
+    """THE SCHEMA IS CLOSED, so a knob declared and not typed is refused by helm
+    before the template runs — the adopter meets a schema error about the key
+    upstream told them to set.
+    """
+    root = layout(tmp_path, audit="# nothing yet\n")
+    declare(root, {"audit": ["archive.bucketName"]}, schema_properties={})
+    result = run(root)
+    assert result.returncode == 1
+    assert "declares no property for it" in result.stdout
+    assert "audit.archive.bucketName" in result.stdout
+
+
+def test_a_schema_property_with_no_declaration_is_refused(tmp_path):
+    """THE OPPOSITE FAULT, and the worse one: the schema blesses a value and
+    nothing appends it. That is the silent no-op the schema was closed to delete,
+    reintroduced by the file that closed it.
+    """
+    root = layout(tmp_path, audit="# nothing yet\n")
+    declare(
+        root,
+        {},
+        schema_properties={
+            "audit": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"retentionDays": {"type": "integer"}},
+            }
+        },
+    )
+    result = run(root)
+    assert result.returncode == 1
+    assert "audit.retentionDays" in result.stdout
+    assert "silent no-op" in result.stdout
+
+
+def test_a_schema_that_stops_being_closed_is_refused(tmp_path):
+    """config#15's BEHAVIOUR IS NOT TRADED FOR THE INTERFACE. Opening the schema
+    for one knob must not open it for everything, and `additionalProperties: false`
+    is the whole of that rule.
+    """
+    root = layout(tmp_path, shared="logLevel: info\n")
+    declare(root, {}, closed=False)
+    result = run(root)
+    assert result.returncode == 1
+    assert "additionalProperties: false" in result.stdout
+
+
+def test_a_declaration_that_is_not_a_mapping_is_refused(tmp_path):
+    root = layout(tmp_path, shared="logLevel: info\n")
+    declare(root, "- audit\n- shared\n")
+    result = run(root)
+    assert result.returncode == 1
+    assert "must be a mapping of config-file stem" in result.stdout
+
+
+def test_a_declared_stem_with_an_empty_list_is_refused(tmp_path):
+    """AN EMPTY KEY IS NOT A DECLARATION. It reads as one and declares nothing, so
+    the honest form is to delete the key.
+    """
+    root = layout(tmp_path, audit="# nothing yet\n")
+    declare(root, "audit: []\n")
+    result = run(root)
+    assert result.returncode == 1
+    assert "non-empty LIST" in result.stdout
+
+
+def test_a_knob_that_is_not_a_dotted_path_is_refused(tmp_path):
+    root = layout(tmp_path, audit="# nothing yet\n")
+    declare(root, "audit:\n  - 90\n")
+    result = run(root)
+    assert result.returncode == 1
+    assert "not a dotted knob path" in result.stdout
+
+
+def test_a_conforming_declaration_passes_and_is_counted(tmp_path):
+    """THE GREEN CASE FOR THE SECOND SOURCE, paired with every refusal above. The
+    knob is absent from `chart/config/` and typed in the schema, which is exactly
+    what a real declaring pull request does.
+    """
+    root = layout(tmp_path, audit="# no knob lives here\n", shared="logLevel: info\n")
+    declare(root, {"audit": ["archive.bucketName"]})
+    result = run(root)
+    assert result.returncode == 0, result.stdout
+    assert "2 knobs, each defined once, across 2 files." in result.stdout
+    assert "1 of them carry no default" in result.stdout
+
+
+def test_this_repository_declares_nothing_consequential_today(tmp_path):
+    """THE SHIPPED POSTURE, pinned. The declaration list is empty because all four
+    knobs keep their default — the classification is in the README under "Blast
+    radius", and this is where a line added without reading it shows up.
+    """
+    result = run(REPO)
+    assert result.returncode == 0, result.stdout
+    assert "0 of them carry no default" in result.stdout

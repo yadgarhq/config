@@ -1,24 +1,25 @@
-"""What `chart/values.schema.json` refuses, and why a closed schema is the honest one.
+"""What `chart/values.schema.json` refuses, and why a closed schema stays the honest one.
 
-THE CHART READS NO HELM VALUES AT ALL. `chart/templates/configmap.yaml` copies
-`config/*.yaml` out of the chart's own files with `.Files.Get`, and nothing in
-`chart/` references `.Values` — measured, not assumed: `grep -rn '\\.Values'
-chart/` finds nothing. So a key an adopter sets in a values file, in an Argo
-Application's `helm.parameters`, or with `--set` was READ BY NOBODY and reported
-as a success: `helm template -f override.yaml` rendered byte-identically to no
-override, exit 0, no warning.
+THIS CHART NOW READS A HELM VALUE, FOR EXACTLY THE KNOBS `chart/consequential.yaml`
+DECLARES — AND THAT LIST IS EMPTY. So every key an adopter sets in a values file, in
+an Argo Application's `helm.parameters`, or with `--set` is still read by nobody
+today, and is still REFUSED rather than dropped. `test_required_knob.py` covers the
+interface itself, against a chart copy that declares a knob; this file covers the
+closed schema that keeps everything else out.
 
-THAT SILENCE IS THE DEFECT THIS SCHEMA DELETES, and it is ADR-0569's own failure
-one layer out — a value whose effect depends on which layer you inspect, with
-nothing anywhere saying the number was dropped. An empty `properties` with
-`additionalProperties: false` turns it into a refusal naming the key.
+THE SILENCE IS THE DEFECT THIS SCHEMA DELETES, and it is ADR-0569's own failure one
+layer out — a value whose effect depends on which layer you inspect, with nothing
+anywhere saying the number was dropped. Up to chart 0.1.1 `helm template -f
+override.yaml` rendered byte-identically to no override, exit 0, no warning. An
+empty `properties` with `additionalProperties: false` turns that into a refusal
+naming the key.
 
-A SCHEMA THAT DECLARED THE KNOBS WOULD BE WORSE THAN NONE. `tlsRotation.
-pollSeconds` as a typed property would PASS an adopter's value and the chart
-would then ignore it — validation blessing inert input, which reads as
-confirmation that the value took effect. The knobs are not values, so they are
-not in this schema, and the pull request that teaches the chart to read values is
-the one that puts them there.
+THE INTERFACE DID NOT BUY ITS WAY PAST THAT. `additionalProperties: false` stays, at
+every level, and a typed property is added only for a knob the declaration list
+names — otherwise the schema would PASS an adopter's value and the chart would then
+ignore it, which is validation blessing inert input. The two files opening together,
+knob by knob, is what `scripts/one_source_per_knob.py` enforces, and the last case
+here is this file's half of it.
 
 Run: python3 -m pytest scripts/tests/ -q
 """
@@ -81,14 +82,37 @@ def test_the_lint_refuses_it_too():
     assert "audit" in result.stdout + result.stderr
 
 
-def test_the_schema_declares_no_knob_as_a_value():
-    """A TYPED KNOB HERE WOULD BLESS A VALUE THE CHART IGNORES.
+def test_the_schema_declares_exactly_the_knobs_the_chart_reads():
+    """A TYPED KNOB THE CHART DOES NOT READ WOULD BLESS A VALUE IT IGNORES, and a
+    knob the chart reads with no property here is refused before the template runs.
 
-    The refusal above holds only while `properties` stays empty and the schema
-    stays closed, and the tempting edit is to "document" the knobs by adding
-    them. Demanded explicitly so that edit fails a test rather than quietly
-    converting a refusal into a rubber stamp.
+    So the assertion is the AGREEMENT rather than emptiness: `properties` names
+    exactly what `chart/consequential.yaml` declares. Today both are empty and the
+    refusals above hold for every key; the day a knob is declared this case follows
+    it rather than having to be deleted, which is what stops the tempting edit —
+    "documenting" the knobs here — from quietly converting a refusal into a rubber
+    stamp. `scripts/one_source_per_knob.py` enforces the same agreement at commit
+    time, in both directions and per dotted path.
     """
+    import yaml
+
     schema = json.loads(SCHEMA.read_text())
     assert schema["additionalProperties"] is False
-    assert schema["properties"] == {}
+
+    declared = yaml.safe_load((CHART / "consequential.yaml").read_text()) or {}
+    assert set(schema["properties"]) == set(declared)
+
+
+def test_the_closed_schema_is_what_refuses_a_key_with_no_reader():
+    """MUTATION TRIPWIRE for the case above, which passes when both sides are empty
+    and would therefore also pass if `additionalProperties` were dropped and the
+    agreement held vacuously. This pins the state the refusals above depend on.
+    """
+    schema = json.loads(SCHEMA.read_text())
+    assert schema["properties"] == {}, (
+        "A knob is declared as a value. That is allowed by ADR-0705 — but it makes "
+        "this chart unable to render itself bare, so `helm lint` and `ci / passed` "
+        "must be given `example/values.yaml`, and `test_required_knob.py`'s "
+        "`test_the_shipped_chart_still_renders_with_no_values_at_all` is the case "
+        "to read first."
+    )
