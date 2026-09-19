@@ -2,7 +2,7 @@
 ONE ConfigMap PER FILE IN `config/`, named after the file and carrying it whole.
 
   chart/config/shared.yaml   ->  ConfigMap `shared`,   key `shared.yaml`
-  chart/config/gateway.yaml  ->  ConfigMap `gateway`,  key `gateway.yaml`
+  chart/config/audit.yaml    ->  ConfigMap `audit`,    key `audit.yaml`
 
 and so on. A service mounts the ConfigMaps it reads as DIRECTORIES, so
 `shared.yaml` arrives at `/etc/yadgar/config/shared/shared.yaml` — which is the
@@ -98,7 +98,7 @@ so `hasKey` on it fails the render with a type error rather than answering.
 THIS INSTALLATION'S OWN OVERRIDES FOR THIS DOCUMENT, and an EMPTY one is the
 whole of the verbatim path below. `index` on a map answers nil for an absent key,
 and `default dict` makes that the same thing as "nothing stated here" — so an
-adopter who overrides `shared` leaves the other eight documents untouched.
+adopter who overrides `shared` leaves the other document untouched.
 */}}
 {{- $supplied := (index $.Values $stem) | default dict }}
 {{- if and $supplied (not (kindIs "map" $supplied)) }}
@@ -200,18 +200,21 @@ than no case.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  # THE FILE NAME IS THE CONFIGMAP NAME, so `kubectl -n yadgar get cm iam-db`
-  # answers "what is iam-db configured with" without anybody having to know a
+  # THE FILE NAME IS THE CONFIGMAP NAME, so `kubectl -n yadgar get cm audit`
+  # answers "what is audit configured with" without anybody having to know a
   # naming scheme.
   #
   # NO PREFIX AND NO RELEASE NAME. A prefix would have to be hard-coded into
   # every consuming chart's volume, which puts this repository's release name
-  # inside five other repositories. Checked before choosing it: no chart in the
-  # estate renders a ConfigMap at all today, so there is nothing to collide with.
-  # That is a fact about today rather than a guarantee — a module chart that
-  # later renders a ConfigMap named after itself WOULD collide, and two Argo
-  # Applications owning one object is a fight neither wins. The README records
-  # these names as reserved.
+  # inside every other repository that mounts one of these. Checked before
+  # choosing it: no OTHER chart in the estate renders a ConfigMap named `shared`
+  # or `audit` today — `gateway` renders its own `gateway-knobs` (ADR-0740),
+  # deliberately named to stay clear of this repository's names rather than
+  # reusing one — so there is nothing to collide with. That is a fact about
+  # today rather than a guarantee — a module chart that later renders a
+  # ConfigMap named `shared` or `audit` WOULD collide, and two Argo Applications
+  # owning one object is a fight neither wins. The README records these names
+  # as reserved.
   name: {{ trimSuffix ".yaml" $file }}
   labels:
     app.kubernetes.io/name: {{ trimSuffix ".yaml" $file }}
@@ -227,8 +230,8 @@ data:
 {{- /*
 THIS COMMENT IS RENDERED INTO THE CONFIGMAP, so the line above is deliberately
 UNCHANGED — including the day the sentence stopped being true of every document.
-It is still true of every document NOBODY OVERRIDES, which is all nine with no
-values supplied; rewording it would change the rendered bytes of all nine for no
+It is still true of every document NOBODY OVERRIDES, which is both with no
+values supplied; rewording it would change the rendered bytes of both for no
 operator-visible gain, and the byte-identity gate exists to catch exactly that.
 The qualifier an overridden document needs is emitted below, for that document
 only, so the day an installation sets a knob the rendered MANIFEST says so and every

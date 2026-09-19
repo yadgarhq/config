@@ -11,8 +11,10 @@
 #
 # WHAT YOU MAY OVERRIDE: every knob this chart defines, stated in your own values
 # file with the config file's stem outermost — `shared.tlsRotation.pollSeconds`,
-# `shared.tlsRotation.splayMaxSeconds`, `gateway.toolsPoll.intervalSeconds` and
-# `audit.audit.retentionDays`. The ConfigMap is rendered from a DEEP MERGE of the
+# `shared.tlsRotation.splayMaxSeconds` and `audit.audit.retentionDays`. A knob read
+# by exactly one service, such as `gateway`'s tools-poll interval, is this chart's
+# knob no longer — since ADR-0740 it lives in that service's own chart instead.
+# The ConfigMap is rendered from a DEEP MERGE of the
 # chart's own document under what you state (ADR-0721), so one line changes one number
 # and you inherit the rest of that document from the version you pinned.
 # `example/values.yaml` beside this file is the shape, and as it stands it is `{}` —
