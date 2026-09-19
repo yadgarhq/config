@@ -64,16 +64,22 @@ jobs:
       RELEASE_APP_CLIENT_ID: ${{ secrets.RELEASE_APP_CLIENT_ID }}
       RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
-  # THE TAG PATH, AND IT CARRIES THE CREDENTIAL FOR A DIFFERENT JOB THAN THE
-  # ONE ABOVE. `ci-release.yaml`'s `deployment` job writes the released image
-  # digest into `versions/<module>.yaml` in `yadgarhq/argocd`, and that file is
-  # what the ApplicationSet reads to pin this module's image. Passing nothing
-  # here is what decided that a published release never reached a pod.
+  # THE TAG PATH, AND THE CREDENTIAL HERE IS NOT FOR THE `deployment` JOB.
+  # `config` ships no `Containerfile`, so `ci-release.yaml`'s `image` job
+  # skips, and `deployment` skips with it (its condition is
+  # `needs.image.result == 'success'`) — this repository has never written a
+  # `versions/<module>.yaml` and never will; no pod is ever pinned to a
+  # `config` image.
+  #
+  # The credential is for whichever job in `ci-release.yaml` needs to act with
+  # the release App's identity on this repository's behalf once a chart is
+  # released — the shared workflow gains and loses jobs over time, and
+  # ADR-0560 asks that the secret reach every job that reads it, not only the
+  # ones that exist in it today.
   #
   # THE FAILURE WAS GREEN, which is why it survived. Both secrets are declared
-  # `required: false` in the callee, so a caller that passes none hands over two
-  # empty strings: the job detects that, writes a step summary saying
-  # `yadgarhq/argocd` was not told about the version, and reports SUCCESS.
+  # `required: false` in the callee, so a caller that passes none hands over
+  # two empty strings, and the job reports SUCCESS rather than refusing.
   #
   # NAMED RATHER THAN `secrets: inherit`, for the reason set out above the
   # `main:` job. The same zizmor audit reads this call too.
