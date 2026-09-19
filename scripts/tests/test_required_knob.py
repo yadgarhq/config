@@ -211,6 +211,95 @@ def test_the_overridden_document_is_re_emitted_from_the_MERGED_data(tmp_path):
     assert parsed["audit"]["retentionDays"] == 90
 
 
+# --------------------------- the per-leaf partition, at RENDER time rather than at commit
+
+
+SIBLING_DECLARE = {"shared": ["tlsRotation.pollSeconds"]}
+SIBLING_SCHEMA = {
+    "shared": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "tlsRotation": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "pollSeconds": {"type": "integer", "minimum": 1},
+                    "splayMaxSeconds": {"type": "integer", "minimum": 0},
+                },
+            }
+        },
+    }
+}
+
+
+def without_pollseconds(copy: Path) -> None:
+    """Rule 2 applied to the copy: the declared knob is DELETED from `chart/config/`.
+
+    Its sibling stays. That is what a real declaring pull request does under
+    ADR-0721's per-leaf partition, and up to 0.1.4 it was forbidden.
+    """
+    document = copy / "config" / "shared.yaml"
+    lines = [line for line in document.read_text().splitlines(keepends=True)
+             if not line.startswith("  pollSeconds:")]
+    document.write_text("".join(lines))
+
+
+def test_a_declared_knob_and_its_sibling_default_RENDER_into_one_mapping(tmp_path):
+    """THE CASE ADR-0720 REFUSED, AND IT REFUSED IT AT RENDER TIME.
+
+    Its ground was mechanical: the append wrote a top-level `tlsRotation:` mapping
+    into a document that already had one, which emits a DUPLICATE mapping key — a
+    ConfigMap that renders cleanly and that `serde_yaml` then refuses, so the reader
+    fails to boot on a document helm was happy with. `scripts/one_source_per_knob.py`
+    refused it at commit time and the template refused it at render time.
+
+    ADR-0721 replaces the append with a deep merge, and this is the case that proves
+    the refusal is gone rather than merely inverted in the gate: `pollSeconds` comes
+    from the values file, `splayMaxSeconds` from the chart, and they arrive under ONE
+    `tlsRotation` key. The gate-side half of this is
+    `test_one_source_per_knob.py::test_a_sibling_under_the_same_top_level_key_MAY_be_classified_differently`,
+    which proves nothing about what helm emits.
+    """
+    copy = chart_copy(tmp_path, declare=SIBLING_DECLARE, schema_properties=SIBLING_SCHEMA)
+    without_pollseconds(copy)
+    values = tmp_path / "values.yaml"
+    values.write_text("shared:\n  tlsRotation:\n    pollSeconds: 30\n")
+    result = helm("template", "ci-render", str(copy), "-f", str(values))
+    assert result.returncode == 0, result.stderr
+
+    import yaml
+
+    documents = [d for d in yaml.safe_load_all(result.stdout) if d]
+    rendered = [d for d in documents if d["metadata"]["name"] == "shared"][0]["data"]["shared.yaml"]
+    # ONE mapping key, not two. A duplicate would still parse here — PyYAML takes the
+    # last — so the count is asserted on the TEXT, which is what `serde_yaml` reads.
+    assert rendered.count("tlsRotation:") == 1, rendered
+    parsed = yaml.safe_load(rendered)
+    assert parsed["tlsRotation"]["pollSeconds"] == 30
+    assert parsed["tlsRotation"]["splayMaxSeconds"] == 300
+    assert "pollSeconds: 30\n" in rendered
+    assert "splayMaxSeconds: 300\n" in rendered
+
+
+def test_the_same_declaration_with_the_line_still_in_the_chart_is_refused(tmp_path):
+    """THE RED PAIR, and the rule the merge does NOT relax. Per leaf is still one
+    source per leaf: `tlsRotation.pollSeconds` declared consequential while
+    `chart/config/shared.yaml` still carries it is two writers for one value, and the
+    template refuses it naming the knob and the file.
+
+    This is the nested-path case; `test_a_knob_declared_consequential_and_also_in_chart_config_is_refused`
+    above is the same fault one level up.
+    """
+    copy = chart_copy(tmp_path, declare=SIBLING_DECLARE, schema_properties=SIBLING_SCHEMA)
+    values = tmp_path / "values.yaml"
+    values.write_text("shared:\n  tlsRotation:\n    pollSeconds: 30\n")
+    result = helm("template", "ci-render", str(copy), "-f", str(values))
+    assert result.returncode != 0
+    assert "tlsRotation.pollSeconds" in result.stderr
+    assert "shared.yaml" in result.stderr
+
+
 # ------------------------------------------------------- the ways it must refuse
 
 

@@ -231,8 +231,16 @@ It is still true of every document NOBODY OVERRIDES, which is all nine with no
 values supplied; rewording it would change the rendered bytes of all nine for no
 operator-visible gain, and the byte-identity gate exists to catch exactly that.
 The qualifier an overridden document needs is emitted below, for that document
-only, so the day an installation sets a knob the ConfigMap says so and every other
-ConfigMap is untouched.
+only, so the day an installation sets a knob the rendered MANIFEST says so and every
+other document is untouched.
+
+THAT QUALIFIER DOES NOT REACH THE CLUSTER, and neither does the paragraph above it.
+Both sit in the `data:` MAPPING, above the `<file>.yaml:` key, so they are part of
+the manifest and not part of the value — `kubectl get cm shared -o yaml` shows
+neither. What reaches the cluster is the block scalar below, which is why a
+document's OWN comments survive a copy and vanish under a merge. So this is written
+for whoever reads `helm template` or Argo's manifest view, and the README rather than
+the ConfigMap is where an operator learns what an override costs.
 */}}
 {{- if $supplied }}
   #
