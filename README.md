@@ -34,11 +34,13 @@ A third mechanism would put one concept in two places, which is the single-write
 ```
 chart/Chart.yaml                the chart
 chart/values.yaml               deliberately empty of settings — see the file for why
+chart/values.schema.json        and a schema that refuses one, because nothing here reads `.Values`
 chart/templates/configmap.yaml  one ConfigMap per file below, named after the file
 chart/config/shared.yaml        knobs every service reads, with the same value in each
 chart/config/gateway.yaml       knobs only `gateway` reads
 chart/config/iam.yaml           ... and so on, one file per service
 chart/config/iam-db.yaml
+chart/config/project.yaml
 chart/config/task.yaml
 chart/config/task-db.yaml
 chart/config/project-db.yaml     the project registry's — empty, and its first knob is D53's depth cap
@@ -65,6 +67,33 @@ D34 already states this for prompts — resolution replaces, it does not merge �
 Editing `gateway.yaml` restarts `gateway`. **Editing `shared.yaml` restarts everything that mounts it**, which is all six services — `gateway`, `iam`, `task`, `iam-db`, `task-db` and `project-db`. That is correct by construction and worth knowing before you edit: a change to a shared knob is a deliberate estate-wide roll, not a surprise.
 
 **Configuration changes roll pods by design.** A value read at boot changes by the process being restarted onto it, and nobody should read that restart as a fault. The mechanism is ADR-0523's rotation watcher and it needed no new code: it already watches every file the process read at boot, so a mounted ConfigMap is in the watch set by that rule alone. An operator edits a file here, Argo syncs the ConfigMap, kubelet swaps the mounted file, the digest changes, the pod drains and exits, and the supervisor restarts it onto the new value.
+
+#### Blast radius also decides which knobs carry a default
+
+ADR-0705 splits defaults on exactly this criterion. A knob **may** carry a default in the pinned chart. A knob whose wrong value carries real consequence carries **no** default and is declared with Helm's `required`, so the sync fails naming the knob and the file.
+
+**That second half is NOT built here, and it cannot be while this chart reads no values.** Helm's `required` does work over a chart's own packaged documents — `.Files.Get` then `fromYaml`, no `.Values` reference needed, measured — but applying it here inverts the guarantee ADR-0705 wants. A knob with no default is absent from `chart/config/`, so the refusal fires for **everyone**: this repository's own `helm lint`, the reference cluster, every installation, permanently. No adopter can satisfy it, because there is no values path to supply it through. The only way to make it pass is to put the value back in `chart/config/` — at which point the knob has a default and is no longer the case the rule is about.
+
+So a mechanism was measured and deliberately **not** shipped. What ADR-0705's rule needs first is the delivery model in the paragraph below, and that is a ruling rather than a patch.
+
+**Its declaration list is empty. That is a classification, not an omission.** All four knobs this repository defines keep their shipped default:
+
+| knob                          | reader                                       | why it keeps its default                                                                                                                                                                                                         |
+| ----------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tlsRotation.pollSeconds`     | `yadgar-lifecycle`, read by all six services | It sets how promptly a rotated certificate is picked up, and how hard the API server is polled. The deadline it protects is 30 days wide, so a wrong value degrades timing rather than correctness.                              |
+| `tlsRotation.splayMaxSeconds` | `yadgar-lifecycle`, read by all six services | It bounds how long a replica waits before exiting onto a change. A large value delays the roll; `0` exits at once and is a supported choice. Either way the cost is timing, and the worst case is two replicas leaving together. |
+| `toolsPoll.intervalSeconds`   | `gateway`                                    | It sets how often an MCP client re-polls `tools/list`. A wrong value makes a changed tool catalogue reach clients later, or polls more often than anything needs. Timing and load, not correctness.                              |
+| `audit.retentionDays`         | **none — awaiting its consumer**             | Nothing consumes it, so no value of it can be wrong yet. The paragraph below is the one to read before changing this row.                                                                                                        |
+
+**No knob here warrants `required` today, and ADR-0705 makes that the default posture rather than a preference.** It rejects forbidding chart defaults entirely, because "adding one upstream knob would then fail every installation's sync until each adopted the line, making every knob addition a breaking upgrade". A refusal has to buy something to be worth a breaking upgrade.
+
+**The three knobs with readers are already covered one layer down.** Delete one of their lines and the fault does not pass silently: the process refuses to start, naming the knob and the file it looked in — `shared.yaml` and `gateway.yaml` each say so about their own knobs, and ADR-0705 amends ADR-0569 on the ORIGIN of a value only, so that refusal still stands. A chart-side `required` on them would add a second refusal for one fault, and its message would tell an adopter to edit `chart/config/shared.yaml` — a file that, under ADR-0705's own delivery model, an adopter never has.
+
+**`audit.retentionDays` looks like the archetype and is not, because it has no reader at all.** The audit store is designed and not built, and ADR-0574 records that reader-less state as deliberate rather than an oversight. Declaring it `required` would force every installation to state a number nothing consumes: a refusal that protects nothing and fails syncs to do it. **Do not read the missing reader as a defect to fix by making the knob refuse.** When the audit module ships and reads this file, classify it again — D25 says an audit log with silent holes is worse than none, because it will be trusted, and a retention window only becomes consequential once something honours it.
+
+**The file a refusal names follows the delivery path.** The refusal that exists today is the boot-time one, raised by each knob's own reader, and a knob lives in `chart/config/<file>.yaml`, so that is the file its message names. ADR-0705 describes a different delivery — the chart pinned as an OCI artifact, the values held in an organisation's own repository — and **this chart does not implement it**: nothing under `chart/` reads `.Values`, and `chart/templates/configmap.yaml` copies the documents out of the chart's own files. When that changes, the message names whichever file an adopter edits then.
+
+**Nothing here reads a Helm value, and `chart/values.schema.json` refuses one rather than dropping it.** A key set in a values file, in an Argo Application's `helm.parameters`, or with `--set` reached nothing and reported success — the silent no-op ADR-0569 exists to delete, one layer out. The schema is closed and declares no properties, so helm refuses the key by name in both `helm lint` and `helm template`. **The knobs are deliberately absent from it:** a typed `tlsRotation.pollSeconds` property would pass an adopter's value and the chart would still ignore it, which is validation blessing inert input. The pull request that teaches this chart to read values is the one that fills `properties` in.
 
 ## How a service reads this
 
@@ -152,7 +181,10 @@ Argo syncs this chart through `yadgarhq/deploy`'s `infra/config-app.yaml`, at a 
 | ----------------------------- | --------------------------------------------------------------------------- |
 | `tlsRotation.pollSeconds`     | `yadgar-lifecycle`, read by all six services                                |
 | `tlsRotation.splayMaxSeconds` | `yadgar-lifecycle`, read by all six services                                |
+| `toolsPoll.intervalSeconds`   | `gateway`, which is the only service that builds the `tools/list` response  |
 | `audit.retentionDays`         | **none — awaiting its consumer.** The audit store is designed and not built |
+
+Every one of them carries its shipped default and none is declared with Helm's `required`; the classification and the reasoning for each are under "Blast radius" above.
 
 `project-db.yaml` is rendered and carries no knob at all: its first one is D53's project-path depth cap, and `project-db` ships with no compiled-in default standing in for it.
 

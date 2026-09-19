@@ -1,0 +1,9 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "yadgar/config",
+  "description": "THIS CHART READS NO HELM VALUES. Every knob lives in chart/config/<service>.yaml or chart/config/shared.yaml, and chart/templates/configmap.yaml copies those documents verbatim with .Files.Get — so a key set here, in an adopter's values file, or with --set is read by nothing. This schema closes that hole: it refuses the value rather than ignoring it. Helm enforces it in both helm lint and helm template, which is the `helm lint and render` pre-commit hook and therefore `ci / passed`.",
+  "$comment": "WHY A REFUSAL RATHER THAN A DEFAULT-SHAPED ALLOWANCE. A value this chart cannot read is the silent no-op ADR-0569 exists to delete, one layer out: an operator sets pollSeconds and nothing anywhere says the number was dropped. An empty `properties` with `additionalProperties: false` is the whole of the rule, and the message names the offending key, which is enough to find the line. WHEN A KNOB BECOMES A VALUE, this file is where its shape belongs — type, bounds, and required-ness per ADR-0705 — and the pull request that teaches the chart to read values from an organisation's own file is the one that fills `properties` in. ADR-0705 describes that delivery model and this chart does not implement it yet; see the README's Blast radius section, which says which knobs would carry a default and which would not. Until then the honest schema is the closed one.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}
