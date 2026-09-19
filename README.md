@@ -106,23 +106,37 @@ Never `envFrom`. Environment variables are fixed at container start and kubelet 
 
 ## Adopting this in your own installation
 
-`example/` holds the pair an organisation commits to **its own** GitOps repository:
-`application.yaml` and `values.yaml`. Copy both, edit the three marked lines — your
-repository URL, the path to your values file, and the chart version you pin — and
-you have this installation's configuration. You clone nothing, and you never fork
-the chart (ADR-0705).
+`example/application.yaml` is the Argo `Application` an organisation commits to
+**its own** GitOps repository. Copy it, pin the chart version you want, and you
+have this installation's configuration. You clone nothing, and you never fork the
+chart (ADR-0705).
 
-Those two files are a reference and nothing syncs them from here. `yadgarhq/deploy`'s
+That file is a reference and nothing syncs it from here. `yadgarhq/deploy`'s
 `infra/config-app.yaml` is what deploys config into the reference cluster, and the
 two differ on purpose: that one follows `main` by a git path under D55, so a merge
 here reaches the reference cluster at once. That is right for the repository that
 owns the chart and wrong for an installation consuming it, which pins a version.
 
-To see what a pinned version gives you before you override anything:
+**An adopter cannot override a setting at chart 0.1.0, and there is deliberately no
+example values file.** This chart has no Helm values interface at all: the template
+copies `chart/config/*.yaml` verbatim out of the packaged artifact with
+`.Files.Get`, and nothing in `chart/` references `.Values`. A `-f your-values.yaml`
+therefore renders byte-identical output and exits 0 — no warning, no failure, no
+effect. ADR-0705's remaining half is the values interface and the `required` refusal
+that goes with it; `required` needs a `.Values` reference, and introducing one
+reverses this chart's byte-for-byte copy property, so it is a ruling rather than a
+patch. Until it is ruled on, an installation that needs a different value changes it
+here, upstream, as a reviewed pull request.
+
+To see exactly what a pinned version puts in your cluster:
 
 ```
-helm show values oci://ghcr.io/yadgarhq/charts/config --version 0.1.0
+helm template config oci://ghcr.io/yadgarhq/charts/config --version 0.1.0
 ```
+
+Not `helm show values` — that prints this chart's `values.yaml`, which is `{}` by
+design, so it answers "what do I inherit" with nothing. The knobs are in the files
+the template copies, and only a render shows them.
 
 ## Deployment
 
