@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A knob lives in exactly one file.
+"""A knob lives in exactly one file, and every knob the chart knows is declared.
 
 There is no merge and no precedence between `shared.yaml` and a service's own
 document. A value assembled from two layers is a value nobody wrote and nobody
@@ -15,7 +15,7 @@ WHAT IT CHECKS: no leaf key path appears in more than one document under
 only a collision if a knob under it does, and reporting the parent would make the
 message point at the wrong line.
 
-THERE ARE TWO SOURCES NOW, NOT ONE, and half a rule enforced is worse than none
+THERE ARE TWO SOURCES, NOT ONE, and half a rule enforced is worse than none
 because it reads as full coverage. ADR-0705 lets a CONSEQUENTIAL knob come from
 the adopter's own values file instead of from `chart/config/`, declared in
 `chart/consequential.yaml`. That ruling amends ADR-0569 on the ORIGIN of a value
@@ -24,28 +24,48 @@ sources: a knob declared consequential and also present in `chart/config/` is th
 same two-writer fault as a knob in two documents, and `chart/config/` alone cannot
 see it.
 
-THE PARTITION THIS MECHANISM CAN ENFORCE IS BY TOP-LEVEL KEY, not by leaf.
-`chart/templates/configmap.yaml` APPENDS the values-supplied keys to its verbatim
-copy of the document, so a top-level key that document already has would emit a
-duplicate mapping key — a ConfigMap that renders cleanly and that `serde_yaml`
-then refuses. A leaf-level partition would need a deep merge, and a merge would
-re-emit the document and take its comments away, which is the property this
-repository exists to keep. So `tlsRotation.pollSeconds` cannot be declared
-consequential while `tlsRotation.splayMaxSeconds` stays in `shared.yaml`: both move
-or neither does. That is a real limit of the design, stated here rather than
-discovered at a sync.
+THE PARTITION IS PER LEAF, and under ADR-0721 that is the whole of it. The chart
+renders each ConfigMap from a DEEP MERGE of its own document under the adopter's
+`.Values.<stem>`, so nothing is appended and no duplicate mapping key can be
+emitted. `tlsRotation.pollSeconds` may therefore be declared consequential while
+`tlsRotation.splayMaxSeconds` keeps its default — which ADR-0720's append could
+not express, and which this gate refused until 0.1.4 on that ground. What may NOT
+happen is the same LEAF living in both sources at once.
 
-IT ALSO REFUSES THE DECLARATION AND THE SCHEMA DISAGREEING, in either direction.
-`chart/values.schema.json` is closed at every level, so a knob declared with no
-property is refused before the template runs — the adopter meets a schema error
-about a key upstream told them to set. A property with no declaration is the
-opposite fault: a value the schema blesses and nothing appends, which is the exact
-silent no-op that schema was closed to delete.
+IT ALSO REFUSES EVERY DISAGREEMENT BETWEEN THE TWO SOURCES AND THE SCHEMA, in
+both directions, because `chart/values.schema.json` is the interface an adopter
+actually meets. Per leaf, exactly one of two things supplies a knob: the chart's
+own document carries a default for it, or `chart/consequential.yaml` declares it
+consequential and it carries no default anywhere. The schema declares that union
+and nothing else. So three faults, each with its own message:
 
-BOTH `chart/consequential.yaml` AND `chart/values.schema.json` ABSENT MEANS NOTHING
-IS DECLARED, and is not a fault. Neither file can be deleted to turn this check
-off quietly, because the agreement check above is symmetric: deleting one while the
-other still names a knob is itself a refusal.
+  - A chart default with NO schema property: the adopter cannot change the knob
+    from their own repository at all, so they must fork the chart. That is the
+    clone-nothing-change-nothing state ADR-0721 exists to delete, one knob at a
+    time.
+  - A declared consequential knob with NO schema property: the closed schema
+    refuses it before the template runs, so the adopter meets a schema error about
+    the key upstream told them to set.
+  - A schema property with NEITHER a chart default nor a declaration: unset, the
+    knob is absent from the rendered document and the reader refuses to boot, with
+    nothing from this chart saying which knob or which file (ADR-0569). Set, it
+    works. A knob whose refusal depends on whether anybody happened to state it is
+    the failure both rulings are about.
+
+HELM'S `global` IS THE ONE PROPERTY WITH NO SOURCE, and it is exempt by name. Helm
+injects it into every subchart's values, so a closed schema that does not declare it
+makes this chart unusable as a DEPENDENCY — which ADR-0722's parent chart needs. It
+is not a knob, nothing in `chart/config/` can default it, and declaring it
+consequential would mean nothing; so it is expected in the schema and excluded from
+the partition rather than being made to satisfy it.
+
+`chart/values.schema.json` MUST EXIST and MUST BE CLOSED AT EVERY LEVEL. It is
+what turns a key with no reader into a refusal naming the key, and under ADR-0721
+it is also the only thing standing between a typo and a value merged into a
+document beside the knob it was meant to be — `pollSecond` next to `pollSeconds`,
+both looking set, one of them read. `chart/consequential.yaml` may be absent,
+which means nothing is declared; the disagreement checks are symmetric, so
+deleting one file while the other still names a knob is itself a refusal.
 
 IT ALSO REFUSES THREE WAYS A FILE CAN BE PRESENT AND UNREAD, because each of
 them passes every other check in this repository while rendering no ConfigMap:
@@ -57,9 +77,12 @@ stem IS the ConfigMap's name; `helm lint` reports an invalid one as a WARNING
 and still exits 0, so it reaches Argo and fails at sync).
 
 WHAT IT DOES NOT CHECK, and says so rather than implying coverage it lacks:
-whether a knob has a reader, whether its value is sensible, or whether a service
-mounts the file its knobs are in. The first two are questions for a human; the
-third belongs to the consuming chart.
+whether a knob has a reader, whether its value is sensible, whether the TYPE the
+schema gives a knob matches the value the chart defaults it to, or whether a
+service mounts the file its knobs are in. The first two are questions for a human,
+the third is a render-time question `helm lint` answers on the chart's own
+documents only if they are overridden, and the fourth belongs to the consuming
+chart.
 
 If a knob genuinely needs a per-service override of a shared value, that is a
 design change to bring to the decision record — not something to reach by adding
@@ -75,11 +98,19 @@ import yaml
 
 CONFIG = pathlib.Path("chart/config")
 
-# THE SECOND SOURCE (ADR-0705), and the schema that has to agree with it. Both
+# THE SECOND SOURCE (ADR-0705), and the schema that has to agree with both. All
 # relative, resolved when the script runs, so a test lays out a tree under
 # `tmp_path` and runs the gate there.
 CONSEQUENTIAL = pathlib.Path("chart/consequential.yaml")
 SCHEMA = pathlib.Path("chart/values.schema.json")
+
+# HELM'S OWN RESERVED KEY, which is not a knob and has no source. Helm injects
+# `global` into every subchart's values, so a closed schema that does not declare it
+# makes this chart impossible to use as a DEPENDENCY: a parent holding it in `charts/`
+# fails to render with no values supplied at all. It is therefore expected in the
+# schema and exempt from the per-leaf partition below — `chart/config/` cannot carry a
+# default for it and declaring it consequential would be meaningless.
+RESERVED = {"global"}
 
 # RFC 1123 label. A ConfigMap name may be a DNS SUBDOMAIN, which also allows
 # dots, but the name is the directory a service mounts it under, so the stricter
@@ -106,7 +137,7 @@ def schema_leaves(node, prefix=""):
 
     A property with no nested `properties` is a leaf, whatever its `type` says: a
     free-form object an adopter fills in is one value from this gate's point of
-    view, and the chart appends it whole.
+    view, and the chart merges it whole.
     """
     for key, subschema in (node or {}).items():
         path = f"{prefix}.{key}" if prefix else str(key)
@@ -117,12 +148,29 @@ def schema_leaves(node, prefix=""):
             yield path
 
 
+def open_levels(node, prefix=""):
+    """Every level of a `properties` tree that is not closed.
+
+    `additionalProperties: false` at the ROOT ONLY would leave `shared: {tlsRotation:
+    {pollSecond: 30}}` accepted — the typo is not an additional property of the
+    root, it is one of `tlsRotation`. Under ADR-0721 that value would then be
+    merged into `shared.yaml` beside the knob it was meant to be.
+    """
+    for key, subschema in (node or {}).items():
+        path = f"{prefix}.{key}" if prefix else str(key)
+        nested = (subschema or {}).get("properties")
+        if isinstance(nested, dict) and nested:
+            if (subschema or {}).get("additionalProperties") is not False:
+                yield path
+            yield from open_levels(nested, path)
+
+
 def read_declaration() -> tuple[dict[str, list[str]], str | None]:
     """`chart/consequential.yaml` as stem -> dotted knob paths.
 
     ABSENT MEANS NOTHING IS DECLARED, which matches the `{}` the file ships with.
-    A missing file is not a way to switch this off: the schema-agreement check
-    below refuses a schema that still names a knob.
+    A missing file is not a way to switch this off: the disagreement checks below
+    refuse a schema that still names a knob nothing supplies.
     """
     if not CONSEQUENTIAL.is_file():
         return {}, None
@@ -154,25 +202,23 @@ def read_declaration() -> tuple[dict[str, list[str]], str | None]:
     return declared, None
 
 
-def check_schema_agreement(declared: dict[str, list[str]]) -> list[str]:
-    """The declaration and `values.schema.json` name exactly the same knobs.
+def check_the_schema(defaulted: set[str], declared: set[str]) -> list[str]:
+    """The schema declares exactly the union of the two sources, per leaf.
 
-    Both directions, because they fail differently. A knob declared with no
-    property is refused by the closed schema before the template runs, so the
-    adopter meets a schema error about a key upstream told them to set. A property
-    with no declaration blesses a value nothing appends — the silent no-op that
-    schema was closed to delete.
+    `defaulted` is every `<stem>.<dotted path>` a document under `chart/config/`
+    carries a value for; `declared` is every one `chart/consequential.yaml` names.
+    They are disjoint by the collision check in `main`, and their union is the set
+    of knobs this chart KNOWS. The schema names that set and nothing else, because
+    the three ways the two can disagree fail three different ways — each of them
+    written out in this file's docstring.
     """
-    wanted = {f"{stem}.{knob}" for stem, knobs in declared.items() for knob in knobs}
     if not SCHEMA.is_file():
-        if wanted:
-            return [
-                f"::error::{SCHEMA} does not exist, but {CONSEQUENTIAL} declares "
-                + ", ".join(f"`{path}`" for path in sorted(wanted))
-                + ". The schema is closed, so a declared knob with no property is "
-                "refused before the template runs."
-            ]
-        return []
+        return [
+            f"::error::{SCHEMA} does not exist. It is the interface an adopter meets: "
+            "it is what makes a knob settable from their own repository (ADR-0721) and "
+            "what makes a key with no reader a refusal naming the key rather than a "
+            "value merged in beside the knob it was meant to be."
+        ]
     try:
         schema = json.loads(SCHEMA.read_text())
     except json.JSONDecodeError as error:
@@ -186,18 +232,37 @@ def check_schema_agreement(declared: dict[str, list[str]]) -> list[str]:
             "that behaviour survives the values interface rather than being traded "
             "for it."
         )
-    have = set(schema_leaves(schema.get("properties")))
-    for path in sorted(wanted - have):
+    for path in sorted(open_levels(schema.get("properties"))):
+        findings.append(
+            f"::error::{SCHEMA} — `{path}` does not set `additionalProperties: false`. "
+            "The schema is closed AT EVERY LEVEL or it is not closed: a typo one level "
+            f"down is an additional property of `{path}`, not of the root, and the "
+            "chart would merge it into the document beside the knob it was meant to be."
+        )
+
+    have = set(schema_leaves(schema.get("properties"))) - RESERVED
+    for path in sorted(declared - have):
         findings.append(
             f"::error::`{path}` is declared consequential in {CONSEQUENTIAL} but "
             f"{SCHEMA} declares no property for it. The schema is closed, so an "
             "adopter who sets the knob upstream told them to set is refused by name."
         )
-    for path in sorted(have - wanted):
+    for path in sorted(defaulted - have):
         findings.append(
-            f"::error::{SCHEMA} declares `{path}` but {CONSEQUENTIAL} does not. "
-            "Nothing appends it, so an adopter's value is blessed by the schema and "
-            "then dropped — the silent no-op this schema was closed to delete."
+            f"::error::`{path}` carries a default in {CONFIG}/{path.split('.')[0]}.yaml "
+            f"and {SCHEMA} declares no property for it, so no adopter can change it "
+            "without forking this chart. That is the state ADR-0721 exists to delete, "
+            "one knob at a time: declare it here, typed, and the chart merges an "
+            "adopter's value over the default."
+        )
+    for path in sorted(have - (defaulted | declared)):
+        findings.append(
+            f"::error::{SCHEMA} declares `{path}`, but nothing supplies it: "
+            f"{CONFIG}/{path.split('.')[0]}.yaml carries no default for it and "
+            f"{CONSEQUENTIAL} does not declare it consequential. An adopter who leaves "
+            "it unset gets a document with the knob missing and a reader that refuses "
+            "to boot (ADR-0569), with nothing from this chart naming the knob or the "
+            "file. Give it a default or declare it consequential."
         )
     return findings
 
@@ -232,7 +297,12 @@ def main() -> int:
         return 1
 
     owners: dict[str, list[str]] = {}
-    top_level: dict[str, set[str]] = {}
+    # THE SAME KNOBS AGAIN, ADDRESSED THE WAY AN ADOPTER ADDRESSES THEM: the file
+    # stem outermost, which is what `.Values.<stem>` and the schema both use. The
+    # collision check below works in the document's own keyspace, where two files
+    # holding one knob collide; the schema check works in the adopter's, where the
+    # stem is part of the knob's address.
+    defaulted: set[str] = set()
     for path in documents:
         if not DNS_1123_LABEL.match(path.stem):
             print(
@@ -250,20 +320,20 @@ def main() -> int:
         # A comments-only document parses to None. That is a file waiting for its
         # first knob, not a fault.
         if document is None:
-            top_level[path.stem] = set()
             continue
         if not isinstance(document, dict):
             print(f"::error::{path} must be a mapping at the top level")
             return 1
-        top_level[path.stem] = {str(key) for key in document}
         for knob in leaves(document):
             owners.setdefault(knob, []).append(str(path))
+            defaulted.add(f"{path.stem}.{knob}")
 
     # THE SECOND SOURCE JOINS THE SAME KEYSPACE, so a knob declared consequential
     # and also written in `chart/config/` is reported by the collision loop below
     # with the same message and both sources named. Nothing special-cases it,
     # because it is not a special case: it is one knob with two writers.
     stems = {path.stem for path in documents}
+    consequential: set[str] = set()
     for stem, knobs in sorted(declared.items()):
         if stem not in stems:
             print(
@@ -275,6 +345,7 @@ def main() -> int:
             return 1
         for knob in knobs:
             owners.setdefault(knob, []).append(str(CONSEQUENTIAL))
+            consequential.add(f"{stem}.{knob}")
 
     collisions = {k: v for k, v in owners.items() if len(v) > 1}
     if collisions:
@@ -287,50 +358,25 @@ def main() -> int:
             )
         return 1
 
-    # THE TOP-LEVEL PARTITION, which is stricter than the leaf rule above and has
-    # to be. The chart APPENDS a values-supplied top-level mapping to its verbatim
-    # copy of the document, so a top-level key the document already holds emits a
-    # DUPLICATE mapping key: a ConfigMap that renders cleanly and a reader that
-    # refuses to parse it. A leaf-level partition would need a deep merge, and a
-    # merge would re-emit the document and take its comments away.
-    for stem, knobs in sorted(declared.items()):
-        for knob in knobs:
-            parent = knob.split(".", 1)[0]
-            if parent in top_level.get(stem, set()):
-                siblings = sorted(
-                    path
-                    for path in owners
-                    if path == parent or path.startswith(f"{parent}.")
-                )
-                print(
-                    f"::error::`{knob}` is declared consequential in "
-                    f"{CONSEQUENTIAL}, so it carries no default — but "
-                    f"{CONFIG}/{stem}.yaml already defines `{parent}` at the top "
-                    "level. The chart appends the values-supplied keys to its "
-                    "verbatim copy of that document, so a top-level key it already "
-                    "has would emit a duplicate mapping key. The partition is by "
-                    "TOP-LEVEL KEY, not by leaf: move every knob under "
-                    f"`{parent}` or none of them. Under `{parent}` today: "
-                    + ", ".join(f"`{path}`" for path in siblings)
-                    + "."
-                )
-                return 1
-
-    findings = check_schema_agreement(declared)
+    findings = check_the_schema(defaulted, consequential)
     if findings:
         for finding in findings:
             print(finding)
         return 1
 
     print(f"{len(owners)} knobs, each defined once, across {len(documents)} files.")
-    consequential = sum(len(knobs) for knobs in declared.values())
     # A SECOND LINE RATHER THAN A REWORDING of the one above, which the suite pins
     # verbatim. Zero is the state this repository means to be in, so it is printed
     # rather than left to be inferred from silence.
     print(
-        f"{consequential} of them carry no default and come from the adopter's "
+        f"{len(consequential)} of them carry no default and come from the adopter's "
         f"values file ({CONSEQUENTIAL})."
     )
+    # AND THE NUMBER ADR-0721 IS ABOUT. Every knob the chart knows is settable from
+    # an adopter's own repository, so this is the first line that goes DOWN when
+    # somebody adds a default and forgets the schema — which is a refusal above, not
+    # a number to watch, but the count is what says the interface is whole.
+    print(f"{len(defaulted | consequential)} of them are settable from an adopter's values file ({SCHEMA}).")
     return 0
 
 

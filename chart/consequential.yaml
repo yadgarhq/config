@@ -2,14 +2,22 @@
 # needs, and it is DELIBERATELY EMPTY.
 #
 #   {}   means: every knob this chart defines carries its shipped default, and an
-#        adopter's values file is refused in full by `values.schema.json`.
+#        adopter who states nothing gets exactly the pinned chart's own values.
 #
-# ADR-0705 splits defaults by blast radius. An ordinary knob keeps a default in
-# the pinned chart, so adding one upstream is not a breaking upgrade — the ruling
+# IT IS NOT THE LIST OF WHAT AN ADOPTER MAY SET. Every knob this chart knows is
+# settable from an adopter's own values file — `chart/templates/configmap.yaml`
+# renders each ConfigMap from a deep merge of `config/<stem>.yaml` under
+# `.Values.<stem>` (ADR-0721), and `chart/values.schema.json` is the list of what
+# exists. This file answers a different question: which knobs have NO default to
+# fall back on, so that an installation which states nothing is REFUSED rather than
+# given a number nobody chose.
+#
+# ADR-0705 splits defaults by blast radius. An ordinary knob keeps a default in the
+# pinned chart, so adding one upstream is not a breaking upgrade — the ruling
 # rejects forbidding chart defaults outright for exactly that reason. A knob whose
 # wrong value carries real consequence carries NO default and is named here, and
-# then nothing renders until the adopter states it: "the refusal moves from boot
-# to sync".
+# then nothing renders until the adopter states it: "the refusal moves from boot to
+# sync".
 #
 # THE CLASSIFICATION FOR ALL FOUR CURRENT KNOBS IS IN THE README, under "Blast
 # radius also decides which knobs carry a default", with the reasoning per knob.
@@ -33,31 +41,30 @@
 #     archive:
 #       bucketName: yadgar-audit-archive
 #
-# `chart/templates/configmap.yaml` then appends those keys to the verbatim copy of
-# `chart/config/audit.yaml`, so the value lands in the ONE document the reader
-# opens. A service mounts the ConfigMap as a DIRECTORY and reads one named path
+# `chart/templates/configmap.yaml` then merges that into `chart/config/audit.yaml`,
+# so the value lands in the ONE document the reader opens. A service mounts the
+# ConfigMap as a DIRECTORY and reads one named path
 # (`/etc/yadgar/config/audit/audit.yaml`), so a second key or a second ConfigMap
-# would be a file nothing ever opens. That is why this appends rather than layers.
+# would be a file nothing ever opens.
 #
 # ─── three things adding a line here obliges you to do ───────────────────────
 #
 # 1. OPEN `chart/values.schema.json` FOR EXACTLY THAT KNOB, and no further. The
-#    schema is closed (`additionalProperties: false`) at every level, so a knob
+#    schema is closed (`additionalProperties: false`) at EVERY level, so a knob
 #    declared here and absent from the schema is refused before this chart's
 #    template ever runs. `scripts/one_source_per_knob.py` refuses the two files
 #    disagreeing, in either direction.
 #
 # 2. DELETE THE KNOB FROM `chart/config/`. ADR-0705 amends ADR-0569 on the ORIGIN
-#    of a value only — one knob still has ONE source. The partition this mechanism
-#    can enforce is by TOP-LEVEL KEY, not by leaf: the append writes a top-level
-#    mapping into the copied document, so a top-level key that document already
-#    has would emit a duplicate mapping key, which `serde_yaml` rejects. A
-#    leaf-level partition would need a deep merge, and a merge would reformat the
-#    document and take its comments away — which is the property this chart exists
-#    to keep. So `tlsRotation.pollSeconds` cannot be declared here while
-#    `tlsRotation.splayMaxSeconds` stays in `shared.yaml`; both move or neither
-#    does. `scripts/one_source_per_knob.py` refuses it at commit time and the
-#    template refuses it at render time.
+#    of a value only — one knob still has ONE source, and a knob with a default is
+#    not the case rule 2 is about. THE PARTITION IS PER LEAF: since ADR-0721 the
+#    chart merges rather than appends, so `tlsRotation.pollSeconds` MAY be declared
+#    here while `tlsRotation.splayMaxSeconds` keeps its default in `shared.yaml`.
+#    Only the leaf itself may not live in both sources. (Up to 0.1.4 both had to
+#    move together, because an append writes a top-level mapping and a key the
+#    document already held would have emitted a duplicate mapping key.)
+#    `scripts/one_source_per_knob.py` refuses a leaf in both sources at commit time
+#    and the template refuses it at render time.
 #
 # 3. GIVE CI A VALUES FILE. The moment this list is non-empty, THIS CHART CANNOT
 #    RENDER ITSELF BARE — which is the whole point, and it lands on upstream too.

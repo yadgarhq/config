@@ -13,29 +13,51 @@ NOTHING ENUMERATES THE SERVICES. The glob is the list, so adding a service is
 adding a file. A `range` over a hard-coded list here would be the central list
 D54 exists to delete, one repository over.
 
-THE FILE IS COPIED, NOT TEMPLATED. `.Files.Get` hands back the bytes on disk, so
-comments survive into the cluster and no rendering step stands between what an
-operator wrote and what a process reads. It also means a `{{` inside one of those
-documents is data rather than a template — which is correct, and worth knowing
-before somebody tries to make a knob depend on a Helm value.
+EACH DOCUMENT IS RENDERED FROM A DEEP MERGE of the file on disk under this
+installation's own `.Values.<stem>` (ADR-0721). An adopter clones nothing and
+changes any knob from their own repository in one line; `chart/values.schema.json`
+declares which knobs exist and refuses every other key by name.
+
+THE MERGE IS PER DOCUMENT, and that split is the ruling rather than an
+optimisation:
+
+  - A document with NO override is copied VERBATIM with `.Files.Get`, so its
+    comments still reach the cluster and `kubectl -n yadgar get cm shared -o yaml`
+    still shows the reasoning beside the number.
+  - A document WITH an override is re-emitted from the merged data through
+    `toYaml`, and LOSES its comments. That is a real loss, accepted deliberately:
+    the reasoning still lives in the pinned chart version the adopter can render.
+
+So with no values supplied there is nothing to merge and the render is
+byte-identical to the copy-only form this chart shipped up to 0.1.4 — asserted
+against a pinned sha256 by
+`test_required_knob.py::test_declaring_nothing_renders_the_baseline_byte_for_byte`,
+and per document by `test_values_merge.py`.
+
+WHY NOT BYTE-FOR-BYTE ALWAYS, WHICH IS WHAT THIS FILE USED TO SAY. That property
+was justified by "the file an operator edits is the file a process reads" — and
+ADR-0705 dissolved the premise: under it the operator does NOT edit
+`chart/config/`, they edit their own values file in their own repository. Keeping
+the constraint after its justification was gone is what forced ADR-0720's
+append-only mechanism, which could introduce a knob absent from the chart and
+could never override one that was present. An adopter could clone nothing and
+change nothing, which is ADR-0705's own rejected alternative.
+
+A `{{` INSIDE ONE OF THOSE DOCUMENTS IS STILL DATA rather than a template, on both
+paths: `.Files.Get` hands back bytes and `fromYaml` parses them. Nothing in
+`config/` is ever templated.
 
 MAPS RANGE IN KEY ORDER in Go templates, so the rendered output is stable and a
-`helm template` diff shows only what actually changed.
+`helm template` diff shows only what actually changed. A merged document is
+re-emitted by `toYaml`, which sorts its keys — so an overridden document's key
+order is alphabetical rather than the order the file had.
 
-CONSEQUENTIAL KNOBS ARE THE ONE EXCEPTION, AND `chart/consequential.yaml` LISTS
-THEM. That list is empty today, so every branch below is inert and the render is
-byte-identical to the copy-only form — which is asserted, not hoped for, by
-`test_declaring_nothing_renders_the_baseline_byte_for_byte`. A knob named there
-carries NO default under ADR-0705 rule 2: it is absent from `config/`, it comes
-from the adopter's own values file, and nothing renders until they state it.
-
-IT APPENDS, IT DOES NOT MERGE, and the reader is why. A service mounts the
-ConfigMap as a directory and opens ONE named path, so a values-supplied knob has
-to land IN that document — a second key or a second ConfigMap would be a file
-nothing opens. Appending keeps the copy byte-for-byte and keeps its comments; a
-deep merge would re-emit the document through `toYaml` and take both away. The
-cost is that the partition is by TOP-LEVEL KEY rather than by leaf, which is
-stated at the refusal below and in `chart/consequential.yaml`.
+CONSEQUENTIAL KNOBS ARE THE ONE KNOB CLASS WITH NO DEFAULT, AND
+`chart/consequential.yaml` LISTS THEM. That list is empty today, so every branch
+that reads it is inert. A knob named there is absent from `config/`, it comes from
+the adopter's own values file, and nothing renders until they state it — ADR-0705's
+"the refusal moves from boot to sync", raised by `required` naming the knob and the
+file.
 */}}
 {{- /*
 THE DECLARATION LIST, read once. `default dict` covers both an absent file and a
@@ -69,30 +91,62 @@ so `hasKey` on it fails the render with a type error rather than answering.
 {{- end }}
 {{- range $path, $_ := $files }}
 {{- $file := base $path }}
+{{- $stem := trimSuffix ".yaml" $file }}
 {{- $body := $.Files.Get $path }}
-{{- $knobs := (index $declared (trimSuffix ".yaml" $file)) | default list }}
-{{- if $knobs }}
+{{- $knobs := (index $declared $stem) | default list }}
+{{- /*
+THIS INSTALLATION'S OWN OVERRIDES FOR THIS DOCUMENT, and an EMPTY one is the
+whole of the verbatim path below. `index` on a map answers nil for an absent key,
+and `default dict` makes that the same thing as "nothing stated here" — so an
+adopter who overrides `shared` leaves the other eight documents untouched.
+*/}}
+{{- $supplied := (index $.Values $stem) | default dict }}
+{{- if and $supplied (not (kindIs "map" $supplied)) }}
+{{-   fail (printf "`%s` in your values file must be a MAPPING of this document's knobs, and it is a %s. The outermost key is the config file's stem and the rest is the knob's own path — see chart/config/%s." $stem (kindOf $supplied) $file) }}
+{{- end }}
+{{- if or $knobs $supplied }}
+{{- /*
+THE PARSE, needed by both the refusal below and the merge, and done ONLY on a
+document that needs it — a document nobody overrides is never parsed and its bytes
+are handed on untouched.
+
+`fromYaml` DOES NOT FAIL ON MALFORMED INPUT: helm hands back a single-key map
+holding `Error`, so a document this chart could not parse would otherwise be
+re-emitted as `Error: ...` — the whole ConfigMap replaced by a message, rendering
+cleanly. `check-yaml` runs over `chart/config/` on every commit here and this does
+not rely on it.
+*/}}
+{{-   $parsed := (fromYaml $body) | default dict }}
+{{-   if and (hasKey $parsed "Error") (eq (len $parsed) 1) }}
+{{-     fail (printf "chart/config/%s is not a YAML document this chart can parse: %s. It cannot be merged with the values this installation supplied for `%s`." $file (index $parsed "Error") $stem) }}
+{{-   end }}
+{{-   range $knob := $knobs }}
 {{- /*
 RULE 1 FIRST, before anything asks for a value. A knob declared consequential is
 ABSENT from `config/` — ADR-0705 amends ADR-0569 on the ORIGIN of a value only.
 This runs even with no values file at all, so a repository-internal fault is
 reported as itself rather than as a missing adopter value.
 
-THE CHECK IS ON THE TOP-LEVEL KEY and that is the limit of the mechanism, not an
-approximation of a finer one. The append writes a top-level mapping into the
-copied document, so a top-level key the document already has produces a DUPLICATE
-mapping key — a ConfigMap that renders cleanly and that `serde_yaml` then refuses
-to parse, which is a worse failure than either half. Both knobs under one parent
-move together or neither moves.
+THE CHECK IS ON THE WHOLE KNOB PATH, which is what the merge buys. ADR-0720's
+append could only partition by TOP-LEVEL key — it wrote a top-level mapping into
+the copied document, so a key that document already had emitted a duplicate
+mapping key and `tlsRotation.pollSeconds` could not be lifted out while
+`splayMaxSeconds` stayed behind. A deep merge has no such restriction: two knobs
+under one parent may be classified differently, and only the leaf itself may not
+live in both sources at once.
 */}}
-{{-   $parsed := (fromYaml $body) | default dict }}
-{{-   $supplied := (index $.Values (trimSuffix ".yaml" $file)) | default dict }}
-{{-   $extra := dict }}
-{{-   range $knob := $knobs }}
 {{-     $segments := splitList "." $knob }}
-{{-     $top := first $segments }}
-{{-     if hasKey $parsed $top }}
-{{-       fail (printf "`%s` is declared consequential in chart/consequential.yaml, so it carries no default — but chart/config/%s already defines `%s` at the top level. A knob has one source (ADR-0569, upheld by ADR-0705), and appending `%s` to a document that already has it would emit a duplicate mapping key. Delete it from chart/config/%s, together with every sibling under `%s`." $knob $file $top $top $file $top) }}
+{{-     $default := $parsed }}
+{{-     $defaulted := true }}
+{{-     range $segment := $segments }}
+{{-       if and $defaulted (kindIs "map" $default) (hasKey $default $segment) }}
+{{-         $default = index $default $segment }}
+{{-       else }}
+{{-         $defaulted = false }}
+{{-       end }}
+{{-     end }}
+{{-     if $defaulted }}
+{{-       fail (printf "`%s` is declared consequential in chart/consequential.yaml, so it carries no default — but chart/config/%s already defines it. A knob has one source (ADR-0569, upheld by ADR-0705): delete the `%s` line from chart/config/%s, or delete the declaration." $knob $file $knob $file) }}
 {{-     end }}
 {{- /*
 THE WALK, and `hasKey` at every step rather than `dig`. `dig` cannot take a
@@ -110,35 +164,37 @@ name the knob and the file, which is the message ADR-0705 asks for in those word
 {{-         $found = false }}
 {{-       end }}
 {{-     end }}
-{{-     $message := printf "`%s` carries no default and must be set in your own values file, under `%s.%s`. It belongs in chart/config/%s, and this chart will not render until you state it (ADR-0705)." $knob (trimSuffix ".yaml" $file) $knob $file }}
+{{-     $message := printf "`%s` carries no default and must be set in your own values file, under `%s.%s`. It belongs in chart/config/%s, and this chart will not render until you state it (ADR-0705)." $knob $stem $knob $file }}
 {{-     if not $found }}
 {{-       fail $message }}
 {{-     end }}
 {{- /*
 `required` ON TOP OF THE WALK, because `hasKey` is true for a key present with no
-value. `bucketName:` with nothing after it would otherwise append
-`bucketName: null` — a value nobody chose, which is the class ADR-0569 exists to
-delete rather than a shape to tolerate. `values.schema.json` usually refuses it
-first; usually is not a guarantee, and this does not depend on the schema being
-tight.
+value. `bucketName:` with nothing after it would otherwise merge
+`bucketName: null` into the document — a value nobody chose, which is the class
+ADR-0569 exists to delete rather than a shape to tolerate. `values.schema.json`
+usually refuses it first; usually is not a guarantee, and this does not depend on
+the schema being tight.
 */}}
 {{-     $leaf := required $message $node }}
-{{-     $built := $leaf }}
-{{-     range $segment := reverse $segments }}
-{{-       $built = dict $segment $built }}
-{{-     end }}
-{{-     $extra = mergeOverwrite $extra $built }}
 {{-   end }}
+{{- end }}
+{{- if $supplied }}
 {{- /*
-THE APPEND, and the `trimSuffix` is the safety. A top-level key at column 0 after
-deeper-indented content is valid YAML and closes whatever was open above it, so
-the structure needs nothing else — but a document with no trailing newline would
-otherwise have the first appended key concatenated onto its last line. Trimming
-one newline and writing one back makes the boundary exactly one newline either
-way. A document with no trailing newline never reaches here in this repository
-(`end-of-file-fixer` runs on every commit) and the append does not rely on that.
+THE MERGE, and the newline `toYaml` does not return. Every document in `config/`
+ends with exactly one (`end-of-file-fixer` runs on every commit), so the printf
+makes the merged body end the same way the copied body does.
+
+THE MOUNTED FILE DOES NOT DEPEND ON THAT, measured rather than assumed: the block
+scalar below is `|`, and YAML's clip chomping ends the value with exactly one
+newline whether the body carried none, one or two. So this is about the emitted
+manifest reading like the copied form in a diff, and nothing a reader opens changes
+if it is got wrong — which is why there is no test pinning it. The test that WOULD
+have pinned it passed under both mutations, and a case that cannot fail is worse
+than no case.
 */}}
-{{-   $body = printf "%s\n%s" (trimSuffix "\n" $body) (toYaml $extra) }}
+{{-   $parsed := (fromYaml $body) | default dict }}
+{{-   $body = printf "%s\n" (include "config.deepMerge" (dict "base" $parsed "over" $supplied)) }}
 {{- end }}
 ---
 apiVersion: v1
@@ -170,17 +226,29 @@ data:
   # back off, so what a process reads is what an operator wrote, plus an indent.
 {{- /*
 THIS COMMENT IS RENDERED INTO THE CONFIGMAP, so the line above is deliberately
-UNCHANGED: it is true of every document this chart ships, and editing it would
-change the rendered bytes of all nine for no operator-visible gain. The qualifier
-it needs is emitted only for a document that actually has one, so the day a knob
-is declared the ConfigMap says so and today's render is untouched.
+UNCHANGED — including the day the sentence stopped being true of every document.
+It is still true of every document NOBODY OVERRIDES, which is all nine with no
+values supplied; rewording it would change the rendered bytes of all nine for no
+operator-visible gain, and the byte-identity gate exists to catch exactly that.
+The qualifier an overridden document needs is emitted below, for that document
+only, so the day an installation sets a knob the ConfigMap says so and every other
+ConfigMap is untouched.
 */}}
+{{- if $supplied }}
+  #
+  # EXCEPT IN THIS DOCUMENT, WHICH THIS INSTALLATION OVERRIDES. It is rendered
+  # from a DEEP MERGE of the chart's own `config/{{ $file }}` under this
+  # installation's `.Values.{{ $stem }}` (ADR-0721), so the keys below are sorted
+  # rather than in the order the file had, and the reasoning written beside each
+  # number in the chart is NOT here. Read it in the chart version you pinned:
+  # `helm show chart` names the version, and the file is `config/{{ $file }}`.
+{{- end }}
 {{- if $knobs }}
   #
-  # AND THE CONSEQUENTIAL KNOBS APPENDED AT THE END OF THIS DOCUMENT, which came
-  # from this installation's own values file rather than from `chart/config/`. They
-  # carry no default anywhere: ADR-0705 rule 2, and `chart/consequential.yaml`
-  # upstream is the list that says which knobs those are.
+  # AND THE CONSEQUENTIAL KNOBS CAME FROM THIS INSTALLATION'S OWN VALUES FILE
+  # rather than from `chart/config/`. They carry no default anywhere: ADR-0705
+  # rule 2, and `chart/consequential.yaml` upstream is the list that says which
+  # knobs those are.
 {{- end }}
   {{ $file }}: |
 {{ regexReplaceAll "(?m)[ \t]+$" (indent 4 $body) "" }}

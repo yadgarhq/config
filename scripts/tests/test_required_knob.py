@@ -12,10 +12,17 @@ Declaring one in the shipped chart to make a test pass would make upstream's own
 `helm lint` unable to render its own chart — see `chart/consequential.yaml`.
 
 WHY A COPY RATHER THAN `--set` ALONE: the declaration and the schema move
-together. `chart/values.schema.json` is closed (`additionalProperties: false`), so
-a values key that is not a declared consequential knob is refused BEFORE the
-template runs. A case that sets a knob therefore has to open the schema for that
-knob too, which is precisely what a real declaring pull request does.
+together. `chart/values.schema.json` is closed (`additionalProperties: false`) at
+every level, so a values key the schema does not declare is refused BEFORE the
+template runs. A case that declares a knob therefore has to declare it in the
+schema too, which is precisely what a real declaring pull request does — and the
+fixture knob is one no document defines, so it is not simply an override of a
+chart default.
+
+WHAT THIS FILE IS NOT ABOUT: overriding a knob that HAS a default. That is
+ADR-0721's merge, and `test_values_merge.py` covers it against the shipped chart.
+Rule 2 is the case where there is no default to fall back on, and the whole of it
+is the refusal.
 
 MOST OF THIS FILE DEMANDS A REFUSAL. An interface proven only by its happy path is
 an interface that would pass whether the refusal worked or not, and the refusal is
@@ -170,12 +177,23 @@ def test_the_value_reaches_the_configmap_data(tmp_path):
     assert yaml.safe_load(rendered)["archive"]["bucketName"] == "yadgar-audit-archive"
 
 
-def test_the_copied_document_survives_the_append_whole(tmp_path):
-    """THE BYTE-FOR-BYTE COPY PROPERTY, which the append must not cost.
+def test_the_overridden_document_is_re_emitted_from_the_MERGED_data(tmp_path):
+    """WHAT A DECLARATION COSTS THE DOCUMENT IT BELONGS TO, and it is a cost.
 
-    `chart/config/audit.yaml` is mostly comments carrying the reasoning for its
-    number, and `kubectl get cm audit -o yaml` is where somebody debugging at 3am
-    reads them. An append that reformatted the document would take that away.
+    A consequential knob only arrives from a values file, so the document that
+    carries it always has an override — and under ADR-0721 an overridden document is
+    re-emitted from the merged data and LOSES its comments. `chart/config/audit.yaml`
+    is mostly the reasoning for its number, and `kubectl get cm audit -o yaml` stops
+    showing it for an installation that sets a knob in that file. ADR-0721 accepts
+    that deliberately: the reasoning still lives in the pinned chart version.
+
+    THE DEEP MERGE IS WHAT KEEPS THE REST OF THE DOCUMENT. `retentionDays` is not
+    declared here, so it is still the chart's own 90 — a whole-document replacement
+    would have dropped it, which is the alternative ADR-0721 rejected.
+
+    The other half of the split — a document with NO override staying byte-verbatim,
+    comments and all — is `test_values_merge.py`'s
+    `test_a_document_with_no_override_stays_BYTE_VERBATIM`.
     """
     copy = chart_copy(tmp_path, declare=FIXTURE_DECLARE, schema_properties=FIXTURE_SCHEMA)
     values = tmp_path / "values.yaml"
@@ -187,13 +205,10 @@ def test_the_copied_document_survives_the_append_whole(tmp_path):
 
     documents = [d for d in yaml.safe_load_all(result.stdout) if d]
     rendered = [d for d in documents if d["metadata"]["name"] == "audit"][0]["data"]["audit.yaml"]
-    original = (CHART / "config" / "audit.yaml").read_text()
-    # Every line of the original is still there, in order, unchanged — the append
-    # only adds. Trailing whitespace is stripped by the template on purpose, so
-    # the comparison is per-line right-stripped.
-    assert [line.rstrip() for line in original.splitlines()] == [
-        line.rstrip() for line in rendered.splitlines()[: len(original.splitlines())]
-    ]
+    assert [line for line in rendered.splitlines() if line.lstrip().startswith("#")] == []
+    parsed = yaml.safe_load(rendered)
+    assert parsed["archive"]["bucketName"] == "yadgar-audit-archive"
+    assert parsed["audit"]["retentionDays"] == 90
 
 
 # ------------------------------------------------------- the ways it must refuse
@@ -221,9 +236,9 @@ PERMISSIVE_SCHEMA = {
 }
 
 
-def test_an_explicit_null_is_refused_rather_than_appended(tmp_path):
+def test_an_explicit_null_is_refused_rather_than_merged_in(tmp_path):
     """`hasKey` IS NOT ENOUGH. A key present with no value walks the dotted path
-    successfully, and appending it would write `bucketName: null` into the
+    successfully, and merging it would write `bucketName: null` into the
     ConfigMap — a value nobody chose, which is the whole class ADR-0569 exists to
     delete. Helm's `required` is what closes it, and this case is what keeps it
     there when the schema is not tight enough to have caught it first.
@@ -375,7 +390,7 @@ def test_the_example_values_file_changes_nothing():
 def test_the_shipped_declaration_list_is_empty():
     """MUTATION TRIPWIRE. `test_declaring_nothing_renders_the_baseline_byte_for_byte`
     above would also pass if the layering were deleted outright, and it would pass
-    if a knob were declared whose append happened to render identically. This case
+    if a knob were declared whose merge happened to render identically. This case
     pins the input the baseline claim is about.
     """
     import yaml

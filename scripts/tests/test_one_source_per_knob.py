@@ -28,8 +28,86 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 GATE = Path(__file__).resolve().parents[1] / "one_source_per_knob.py"
 REPO = Path(__file__).resolve().parents[2]
+
+
+def leaves(node, prefix=""):
+    """The gate's own leaf rule, restated so a fixture can derive a schema from a tree."""
+    for key, value in (node or {}).items():
+        path = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, dict) and value:
+            yield from leaves(value, path)
+        else:
+            yield path
+
+
+def branch(properties: dict, stem: str, dotted: str):
+    """Add `<stem>.<dotted>` to a JSON-Schema `properties` tree, closed at every level."""
+    node = properties.setdefault(
+        stem, {"type": "object", "additionalProperties": False, "properties": {}}
+    )
+    segments = str(dotted).split(".")
+    for segment in segments[:-1]:
+        node = node["properties"].setdefault(
+            segment, {"type": "object", "additionalProperties": False, "properties": {}}
+        )
+    node["properties"][segments[-1]] = {}
+
+
+def derived_properties(root: Path) -> dict:
+    """A schema that agrees with BOTH sources, derived from the tree as laid out.
+
+    ADR-0721 makes the schema the interface for EVERY knob the chart knows, not only
+    the consequential ones: a chart default with no property here cannot be changed
+    by an adopter without forking the chart. So a fixture about one rule has to
+    declare the knobs it wrote, or it trips the agreement rule by accident. The
+    cases that are ABOUT the agreement pass their own `schema_properties`.
+    """
+    properties: dict = {}
+    for path in sorted((root / "chart" / "config").glob("*.yaml")):
+        try:
+            document = yaml.safe_load(path.read_text())
+        except yaml.YAMLError:
+            continue
+        if not isinstance(document, dict):
+            continue
+        for leaf in leaves(document):
+            branch(properties, path.stem, leaf)
+    declaration = root / "chart" / "consequential.yaml"
+    if declaration.is_file():
+        try:
+            parsed = yaml.safe_load(declaration.read_text())
+        except yaml.YAMLError:
+            parsed = None
+        if isinstance(parsed, dict):
+            for stem, knobs in parsed.items():
+                if isinstance(knobs, list):
+                    for knob in knobs:
+                        if isinstance(knob, str) and knob:
+                            branch(properties, str(stem), knob)
+    return properties
+
+
+def write_schema(root: Path, properties=None, *, closed=True):
+    chart = root / "chart"
+    chart.mkdir(parents=True, exist_ok=True)
+    if properties is None:
+        properties = derived_properties(root)
+    (chart / "values.schema.json").write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "additionalProperties": not closed,
+                "properties": properties,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    return root
 
 
 def declare(root: Path, declaration, schema_properties=None, *, closed=True):
@@ -38,45 +116,17 @@ def declare(root: Path, declaration, schema_properties=None, *, closed=True):
     `declaration` is written verbatim when it is a string, so a case can plant a
     malformed one. Otherwise it is dumped as JSON, which every YAML parser reads.
 
-    `schema_properties` defaults to a schema DERIVED from the declaration, so a
-    case about one rule does not trip the agreement rule by accident. The cases
-    about the agreement pass their own.
+    `schema_properties` defaults to a schema DERIVED from both sources, so a case
+    about one rule does not trip the agreement rule by accident. The cases about the
+    agreement pass their own.
     """
     chart = root / "chart"
     chart.mkdir(parents=True, exist_ok=True)
     if isinstance(declaration, str):
         (chart / "consequential.yaml").write_text(declaration)
-        parsed = {}
     else:
         (chart / "consequential.yaml").write_text(json.dumps(declaration or {}) + "\n")
-        parsed = declaration or {}
-
-    if schema_properties is None:
-        schema_properties = {}
-        for stem, knobs in parsed.items():
-            node = schema_properties.setdefault(
-                stem, {"type": "object", "additionalProperties": False, "properties": {}}
-            )
-            for knob in knobs if isinstance(knobs, list) else []:
-                cursor = node
-                segments = str(knob).split(".")
-                for segment in segments[:-1]:
-                    cursor = cursor["properties"].setdefault(
-                        segment,
-                        {"type": "object", "additionalProperties": False, "properties": {}},
-                    )
-                cursor["properties"][segments[-1]] = {}
-    (chart / "values.schema.json").write_text(
-        json.dumps(
-            {
-                "type": "object",
-                "additionalProperties": not closed,
-                "properties": schema_properties,
-            },
-            indent=2,
-        )
-        + "\n"
-    )
+    write_schema(root, schema_properties, closed=closed)
     return root
 
 
@@ -92,7 +142,10 @@ def layout(tmp_path: Path, **files):
         if "." not in stem:
             stem += ".yaml"
         (directory / stem).write_text(text)
-    return tmp_path
+    # THE SCHEMA IS NOT OPTIONAL UNDER ADR-0721 — it is what makes a knob settable
+    # from an adopter's own repository, so the gate refuses a tree without one and
+    # every fixture needs the one its own documents imply.
+    return write_schema(tmp_path)
 
 
 def run(cwd: Path):
@@ -266,24 +319,25 @@ def test_the_same_knob_declared_and_also_in_chart_config_is_refused(tmp_path):
     assert "chart/config/audit.yaml" in result.stdout
 
 
-def test_a_sibling_under_the_same_top_level_key_is_refused(tmp_path):
-    """THE PARTITION IS BY TOP-LEVEL KEY, NOT BY LEAF, and this is the case that
-    says so. There is no leaf collision here — `pollSeconds` is in one source and
-    `splayMaxSeconds` in the other — but the chart APPENDS a top-level
-    `tlsRotation:` mapping to a document that already has one, which emits a
-    duplicate mapping key that `serde_yaml` refuses. So the first realistic
-    consequential knob in this repository cannot be declared alone; both knobs
-    under `tlsRotation` move or neither does.
+def test_a_sibling_under_the_same_top_level_key_MAY_be_classified_differently(tmp_path):
+    """THE PARTITION IS PER LEAF, and this case is where that changed.
+
+    Until 0.1.4 the chart APPENDED the values-supplied keys to its verbatim copy, so
+    a top-level key the document already held would have emitted a duplicate mapping
+    key — and this gate refused `tlsRotation.pollSeconds` being declared while
+    `tlsRotation.splayMaxSeconds` stayed behind. ADR-0721 replaces the append with a
+    DEEP MERGE, which has no such restriction: the two knobs under one parent may be
+    classified differently, and only the leaf itself may not live in both sources.
+
+    The red pair for this is `test_the_same_knob_declared_and_also_in_chart_config_is_refused`
+    above: the LEAF in both sources is still two writers for one value.
     """
     root = layout(tmp_path, shared="tlsRotation:\n  splayMaxSeconds: 300\n")
     declare(root, {"shared": ["tlsRotation.pollSeconds"]})
     result = run(root)
-    assert result.returncode == 1
-    assert "`tlsRotation.pollSeconds` is declared consequential" in result.stdout
-    assert "TOP-LEVEL KEY, not by leaf" in result.stdout
-    # The message names the siblings, so the reader does not have to go and find
-    # what else has to move.
-    assert "tlsRotation.splayMaxSeconds" in result.stdout
+    assert result.returncode == 0, result.stdout
+    assert "1 of them carry no default" in result.stdout
+    assert "2 of them are settable" in result.stdout
 
 
 def test_a_declared_stem_with_no_document_is_refused(tmp_path):
@@ -311,10 +365,12 @@ def test_a_declared_knob_with_no_schema_property_is_refused(tmp_path):
     assert "audit.archive.bucketName" in result.stdout
 
 
-def test_a_schema_property_with_no_declaration_is_refused(tmp_path):
-    """THE OPPOSITE FAULT, and the worse one: the schema blesses a value and
-    nothing appends it. That is the silent no-op the schema was closed to delete,
-    reintroduced by the file that closed it.
+def test_a_schema_property_NEITHER_source_supplies_is_refused(tmp_path):
+    """A KNOB WITH NO DEFAULT AND NO REFUSAL, which is neither of the two classes
+    ADR-0705 defines. An adopter may set it; leave it unset and the document renders
+    without it and the reader refuses to boot (ADR-0569), with nothing from this
+    chart naming the knob or the file. Whether the installation is refused depends on
+    whether anybody happened to state it.
     """
     root = layout(tmp_path, audit="# nothing yet\n")
     declare(
@@ -331,7 +387,82 @@ def test_a_schema_property_with_no_declaration_is_refused(tmp_path):
     result = run(root)
     assert result.returncode == 1
     assert "audit.retentionDays" in result.stdout
-    assert "silent no-op" in result.stdout
+    assert "nothing supplies it" in result.stdout
+
+
+def test_a_chart_DEFAULT_with_no_schema_property_is_refused(tmp_path):
+    """THE FAULT ADR-0721 EXISTS TO DELETE, one knob at a time. A knob defaulted in
+    `chart/config/` and absent from the schema cannot be changed by an adopter at
+    all: their values file is refused by name, so their only route is to fork the
+    chart — which is the state this ruling was filed against.
+
+    This is the direction the gate did NOT check until 0.1.4, because until then no
+    chart default was settable and the schema was empty by design.
+    """
+    root = layout(tmp_path, shared="logLevel: info\n")
+    write_schema(root, {})
+    result = run(root)
+    assert result.returncode == 1
+    assert "shared.logLevel" in result.stdout
+    assert "without forking this chart" in result.stdout
+
+
+def test_a_missing_schema_is_refused(tmp_path):
+    """DELETING THE INTERFACE IS NOT A WAY TO PASS. The schema is what makes a knob
+    settable and a typo a refusal, so its absence is a finding rather than a tree
+    with nothing declared.
+    """
+    root = layout(tmp_path, shared="logLevel: info\n")
+    (root / "chart" / "values.schema.json").unlink()
+    result = run(root)
+    assert result.returncode == 1
+    assert "does not exist" in result.stdout
+
+
+def test_a_schema_level_that_is_not_closed_one_layer_down_is_refused(tmp_path):
+    """CLOSED AT EVERY LEVEL OR NOT CLOSED. `additionalProperties: false` at the root
+    alone accepts `shared.tlsRotation.pollSecond` — the typo is an additional
+    property of `tlsRotation`, not of the root — and the chart would MERGE it into
+    `shared.yaml` beside the knob it was meant to be, both looking set and one read.
+    """
+    root = layout(tmp_path, shared="tlsRotation:\n  pollSeconds: 60\n")
+    declare(
+        root,
+        {},
+        schema_properties={
+            "shared": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "tlsRotation": {
+                        "type": "object",
+                        "properties": {"pollSeconds": {"type": "integer"}},
+                    }
+                },
+            }
+        },
+    )
+    result = run(root)
+    assert result.returncode == 1
+    assert "shared.tlsRotation" in result.stdout
+    assert "EVERY LEVEL" in result.stdout
+
+
+def test_helms_reserved_global_key_is_not_treated_as_a_knob(tmp_path):
+    """`global` IS DECLARED AND HAS NO SOURCE, and it must not be read as the
+    schema-declares-what-nothing-supplies fault above.
+
+    Helm injects `global` into every subchart's values, so a closed schema that does
+    not declare it makes this chart impossible to use as a DEPENDENCY — measured, and
+    ADR-0722's parent chart needs it. `chart/config/` cannot default it and declaring
+    it consequential would mean nothing.
+    """
+    root = layout(tmp_path, shared="logLevel: info\n")
+    properties = derived_properties(root)
+    properties["global"] = {"type": "object"}
+    write_schema(root, properties)
+    result = run(root)
+    assert result.returncode == 0, result.stdout
 
 
 def test_a_schema_that_stops_being_closed_is_refused(tmp_path):
