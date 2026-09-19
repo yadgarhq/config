@@ -146,7 +146,7 @@ two differ on purpose: that one follows `main` by a git path under D55, so a mer
 here reaches the reference cluster at once. That is right for the repository that
 owns the chart and wrong for an installation consuming it, which pins a version.
 
-**An adopter cannot override a setting at chart 0.1.0, and there is deliberately no
+**An adopter cannot override a setting, and there is deliberately no
 example values file.** This chart has no Helm values interface at all: the template
 copies `chart/config/*.yaml` verbatim out of the packaged artifact with
 `.Files.Get`, and nothing in `chart/` references `.Values`. A `-f your-values.yaml`
@@ -160,7 +160,7 @@ here, upstream, as a reviewed pull request.
 To see exactly what a pinned version puts in your cluster:
 
 ```
-helm template config oci://ghcr.io/yadgarhq/charts/config --version 0.1.0
+helm template config oci://ghcr.io/yadgarhq/charts/config --version 0.1.2
 ```
 
 Not `helm show values` — that prints this chart's `values.yaml`, which is `{}` by
