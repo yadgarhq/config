@@ -39,11 +39,15 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 CHART = REPO / "chart"
 
-# THE RENDER OF THE SHIPPED CHART, pinned. Taken at c66bded, which is the commit
-# that closed the schema, and unchanged by every commit since. Verified equal on
-# helm 3.18.4 (the version `azure/setup-helm` pins in `yadgarhq/actions`' CI),
-# 3.20.2 and 4.2.3.
-BASELINE_SHA256 = "ea6212d3e852693392947259432f12e1f00b4c9ead8ec1321db8848d7fb83772"
+# THE RENDER OF THE SHIPPED CHART, pinned. Recomputed for the pull request that
+# deleted the seven per-service documents with at most one reader (ADR-0740).
+# TWO THINGS CHANGE THE BYTES, not one: there are fewer ConfigMaps to render at
+# all, AND `chart/templates/configmap.yaml`'s own `metadata:` comment — rendered
+# into every surviving document too — was corrected for the smaller chart, so
+# `shared` and `audit` render with different bytes as well as `gateway` and the
+# rest rendering not at all. Taken by running this file's own `render_sha256`
+# against the edited chart, not transcribed.
+BASELINE_SHA256 = "6954cbbb6e77fd4bd2740c58d99832449ad6176ff29657746d221c45583ade27"
 
 
 def helm(*arguments: str):

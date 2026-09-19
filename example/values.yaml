@@ -16,10 +16,6 @@
 #     tlsRotation:
 #       pollSeconds: 30
 #
-#   gateway:
-#     toolsPoll:
-#       intervalSeconds: 120
-#
 #   audit:
 #     audit:
 #       retentionDays: 30

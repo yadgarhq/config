@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "yadgar/config",
   "description": "THE KNOBS THIS CHART KNOWS, AND A REFUSAL FOR EVERY OTHER KEY. Each ConfigMap is rendered from a DEEP MERGE of the chart's own chart/config/<stem>.yaml under this installation's .Values.<stem> (ADR-0721), so every property below is settable from an adopter's own repository in one line and nothing has to be cloned or forked. A document nobody overrides is still copied verbatim, comments and all; only a document with an override is re-emitted from the merged data. Helm enforces this schema in both helm lint and helm template, which is the `helm lint and render` pre-commit hook and therefore `ci / passed`, and it is also what an Argo sync meets.",
-  "$comment": "`additionalProperties: false` AT EVERY LEVEL, and it never opens. It is what makes a key with no reader a REFUSAL naming the key rather than a value merged into a document nothing reads it from \u2014 the plausible mistake is not `foo`, it is `pollSecond`, and a merge that absorbed it would leave two keys looking set with one of them read. THE TYPES ARE PART OF THE REFUSAL: a values file reaches helm through sigs.k8s.io/yaml, so `pollSeconds: \"30\"` would arrive as a string and reach serde_yaml as one, which fails the reader at boot instead of the render. WHAT IS DECLARED HERE IS EXACTLY WHAT ONE OF THE TWO SOURCES SUPPLIES, per leaf: either chart/config/<stem>.yaml carries a default for it, or chart/consequential.yaml declares it consequential and it carries no default anywhere (ADR-0705 rule 2) \u2014 never both, and never neither. scripts/one_source_per_knob.py refuses all three of those faults at commit time. REQUIRED-NESS IS NOT EXPRESSED HERE. chart/templates/configmap.yaml calls Helm's `required` instead, because ADR-0705 asks for a refusal naming the knob AND the file, while helm's own schema error says `archive is required` on helm 3 and `missing property 'archive'` on helm 4, names no file, and is not this repository's wording to own. See the README's Blast radius section for which knobs carry a default; all four do today, which is why chart/consequential.yaml is empty. `global` IS DECLARED AND IS NOT A KNOB. Helm injects a `global` key into every subchart's values, so a closed schema with no such property makes this chart impossible to use as a DEPENDENCY at all \u2014 measured: a parent chart holding it in charts/ fails to render with no values supplied, `at '': additional properties 'global' not allowed` on helm 4.2.3 and `(root): Additional property global is not allowed` on helm 3.18.4, and ADR-0722's parent chart pinning every module chart needs exactly that. It is typed as an object and left OPEN inside, deliberately: its contents belong to the parent and to the other subcharts, this chart reads nothing from it, and refusing an unknown key under it would refuse a key another subchart legitimately reads. Nothing under `global` reaches a rendered document \u2014 the template only ever reads `.Values.<config file stem>`.",
+  "$comment": "`additionalProperties: false` AT EVERY LEVEL, and it never opens. It is what makes a key with no reader a REFUSAL naming the key rather than a value merged into a document nothing reads it from \u2014 the plausible mistake is not `foo`, it is `pollSecond`, and a merge that absorbed it would leave two keys looking set with one of them read. THE TYPES ARE PART OF THE REFUSAL: a values file reaches helm through sigs.k8s.io/yaml, so `pollSeconds: \"30\"` would arrive as a string and reach serde_yaml as one, which fails the reader at boot instead of the render. WHAT IS DECLARED HERE IS EXACTLY WHAT ONE OF THE TWO SOURCES SUPPLIES, per leaf: either chart/config/<stem>.yaml carries a default for it, or chart/consequential.yaml declares it consequential and it carries no default anywhere (ADR-0705 rule 2) \u2014 never both, and never neither. scripts/one_source_per_knob.py refuses all three of those faults at commit time. REQUIRED-NESS IS NOT EXPRESSED HERE. chart/templates/configmap.yaml calls Helm's `required` instead, because ADR-0705 asks for a refusal naming the knob AND the file, while helm's own schema error says `archive is required` on helm 3 and `missing property 'archive'` on helm 4, names no file, and is not this repository's wording to own. See the README's Blast radius section for which knobs carry a default; all three do today, which is why chart/consequential.yaml is empty. `global` IS DECLARED AND IS NOT A KNOB. Helm injects a `global` key into every subchart's values, so a closed schema with no such property makes this chart impossible to use as a DEPENDENCY at all \u2014 measured: a parent chart holding it in charts/ fails to render with no values supplied, `at '': additional properties 'global' not allowed` on helm 4.2.3 and `(root): Additional property global is not allowed` on helm 3.18.4, and ADR-0722's parent chart pinning every module chart needs exactly that. It is typed as an object and left OPEN inside, deliberately: its contents belong to the parent and to the other subcharts, this chart reads nothing from it, and refusing an unknown key under it would refuse a key another subchart legitimately reads. Nothing under `global` reaches a rendered document \u2014 the template only ever reads `.Values.<config file stem>`.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -28,24 +28,6 @@
               "type": "integer",
               "minimum": 0,
               "description": "The top of the range each pod draws its own wait from before it exits onto a change. `0` means exit at once, which is a supported choice and not a mistake."
-            }
-          }
-        }
-      }
-    },
-    "gateway": {
-      "type": "object",
-      "description": "Overrides for chart/config/gateway.yaml \u2014 read only by `gateway`.",
-      "additionalProperties": false,
-      "properties": {
-        "toolsPoll": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "intervalSeconds": {
-              "type": "integer",
-              "minimum": 1,
-              "description": "How often, in whole seconds, `gateway` tells an MCP client to re-poll `tools/list` for a changed tool catalogue."
             }
           }
         }

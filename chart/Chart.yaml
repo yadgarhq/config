@@ -1,6 +1,6 @@
 apiVersion: v2
 name: config
-description: The configuration a yadgar installation reads at boot, as one ConfigMap per service.
+description: The configuration a yadgar installation reads at boot, as one ConfigMap per shared document.
 # NOT `library` and not a subchart. It renders objects, so it is an application
 # chart even though it carries no workload — Argo syncs it exactly as it syncs
 # every other chart in this estate, which is the whole of ADR-0570.

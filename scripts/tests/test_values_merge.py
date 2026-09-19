@@ -13,7 +13,7 @@ the ruling rather than an optimisation:
 Both halves are asserted here, on the same render, because either one alone is
 satisfied by a mechanism that is wrong. Verbatim-always is the state ADR-0721
 rejected — an adopter could change nothing. Merge-always would take the comments
-off all nine documents to override one, which is the loss ADR-0721 accepts only
+off every document to override one, which is the loss ADR-0721 accepts only
 where it must.
 
 WHY A VALUES FILE RATHER THAN `--set` in most cases here: an adopter commits a
@@ -133,14 +133,6 @@ def test_a_knob_nested_under_its_own_stem_name_lands(tmp_path):
     assert "retentionDays: 30\n" in rendered["audit"]
 
 
-def test_the_gateway_knob_lands_too(tmp_path):
-    """Every declared knob, not only the one the gate was written against."""
-    rendered = render(tmp_path, "gateway:\n  toolsPoll:\n    intervalSeconds: 120\n")
-    document = yaml.safe_load(rendered["gateway"])
-    assert document["toolsPoll"]["intervalSeconds"] == 120
-    assert "intervalSeconds: 120\n" in rendered["gateway"]
-
-
 def test_the_same_override_through_set_lands_identically(tmp_path):
     """BOTH INPUT PATHS. `--set` parses through `strvals` and a values file through
     `sigs.k8s.io/yaml`; an Argo `helm.parameters` block is the former and a
@@ -166,7 +158,7 @@ def test_a_document_with_no_override_stays_BYTE_VERBATIM(tmp_path):
 
 
 def test_every_document_but_the_overridden_one_is_byte_verbatim(tmp_path):
-    """The split is per document, so EIGHT of the nine are untouched — asserted
+    """The split is per document, so every OTHER one is untouched — asserted
     across all of them rather than on one sample, because a merge that ran
     unconditionally would still pass a single-document check on a document whose
     merge happened to be a no-op.
@@ -254,12 +246,12 @@ def test_a_typo_in_a_declared_knob_is_refused(tmp_path):
 
 
 def test_a_knob_under_the_wrong_stem_is_refused(tmp_path):
-    """`gateway.tlsRotation.pollSeconds` is a real knob under the wrong document.
+    """`audit.tlsRotation.pollSeconds` is a real knob under the wrong document.
     The stem is part of the knob's address, and a merge that ignored it would write
-    a `tlsRotation` block into `gateway.yaml` that nothing reads.
+    a `tlsRotation` block into `audit.yaml` that nothing reads.
     """
     result = helm(
-        "template", "ci-render", str(CHART), "--set", "gateway.tlsRotation.pollSeconds=30"
+        "template", "ci-render", str(CHART), "--set", "audit.tlsRotation.pollSeconds=30"
     )
     assert result.returncode != 0
     assert "tlsRotation" in result.stderr
