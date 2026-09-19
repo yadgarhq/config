@@ -9,23 +9,61 @@
 # That is right for the repository that OWNS the chart and wrong for an
 # installation that merely consumes it. An installation pins a version.
 #
-# YOU CANNOT OVERRIDE A SETTING, AND FROM 0.1.2 THE CHART SAYS SO OUT LOUD. This
-# chart has NO Helm values interface: `chart/templates/configmap.yaml` copies
-# `chart/config/*.yaml` verbatim out of the packaged artifact with `.Files.Get`, and
-# `grep '.Values' chart/` finds nothing. Up to 0.1.1 a values file you passed was
-# silently DROPPED — byte-identical output, exit 0, no warning. From 0.1.2 a closed
-# `values.schema.json` REFUSES it instead: `helm template` and `helm lint --strict`
-# both exit 1 naming your key. That is why there is deliberately no values file
-# beside this one — it would teach you a mechanism that does not exist, and from
-# 0.1.2 it would also fail your sync.
+# WHAT YOU MAY OVERRIDE: exactly the knobs `chart/consequential.yaml` declares
+# upstream, AND THAT LIST IS EMPTY. So today every key you could set is refused, and
+# `example/values.yaml` beside this file is `{}` — copying it changes nothing, which
+# is measured rather than claimed.
 #
-# That is ADR-0705's remaining half, named rather than papered over. The ruling
-# says an organisation supplies its own values and that a consequential knob
-# carries no default but Helm's `required` instead. Neither is built: `required`
-# needs a `.Values` reference, and adding one reverses this chart's stated
-# byte-for-byte copy property. Until that is ruled on, an installation that needs a
-# different value changes it HERE, upstream, as a reviewed pull request — which is
-# the same gate every other change in this estate passes.
+# EVERY OTHER KEY IS REFUSED BY NAME, and that is the feature. Up to 0.1.1 a values
+# file you passed was silently DROPPED — byte-identical output, exit 0, no warning.
+# From 0.1.2 a closed `values.schema.json` REFUSES it: `helm template` and `helm lint
+# --strict` both exit 1 naming your key, and so does your sync. A value whose effect
+# depends on which layer you inspect is the failure ADR-0569 exists to delete.
+#
+# AN ORDINARY KNOB IS NOT SETTABLE HERE AT ALL, and that is ADR-0705's split rather
+# than an omission. A knob whose wrong value costs timing or load keeps its default
+# in the pinned chart; only a knob whose wrong value carries real CONSEQUENCE is
+# lifted out of it, and then it has no default anywhere and you must state it. All
+# four knobs this chart defines are in the first category today — the reasoning per
+# knob is in the chart repository's README, under "Blast radius". An installation
+# that needs a different value for one of those changes it upstream, as a reviewed
+# pull request, which is the same gate every other change in this estate passes.
+#
+# HOW YOU WILL LEARN A KNOB HAS BECOME CONSEQUENTIAL: you bump `targetRevision`
+# below and the sync FAILS, naming the knob and the file. ADR-0705 moves the refusal
+# from boot to sync deliberately, and that is why the version is a line you edit
+# rather than a range you track.
+#
+# TO PASS A VALUES FILE you need Argo's MULTI-SOURCE form, because the chart comes
+# from a registry and the values file from your git repository. THE BLOCK BELOW IS
+# COMMENTED OUT ON PURPOSE and `spec.source` further down is live instead — there is
+# no knob to state today, so activating it buys nothing and a WRONG `$values` PATH
+# FAILS THE SYNC HARD. Uncomment it, delete `spec.source`, and fill in your own
+# repository the day a bump refuses.
+#
+#   spec:
+#     sources:
+#       - repoURL: ghcr.io/yadgarhq/charts
+#         chart: config
+#         targetRevision: 0.1.2
+#         helm:
+#           valueFiles:
+#             # $<ref> BELOW, NOT `$self`. The name is yours to choose and it has to
+#             # match the `ref:` on the second source; `self` is not a reserved word
+#             # and nothing supplies one. The path is relative to that repository's
+#             # ROOT, so it is the path you committed the file at.
+#             - $values/config/values.yaml
+#       # A REF-ONLY SOURCE: no `chart:` and no `path:`, because it contributes no
+#       # manifests. Exactly one source in a multi-source Application may render;
+#       # this one only lends its checkout to the interpolation above.
+#       - repoURL: https://github.com/YOUR-ORG/YOUR-GITOPS-REPO.git
+#         targetRevision: main
+#         ref: values
+#
+# NOT VERIFIED AGAINST A LIVE ARGO. The shape above is Argo's documented
+# multi-source form and the `yadgarhq` reference installation does not use it — its
+# `infra/config-app.yaml` passes no values at all and is single-source. Render it
+# yourself before you rely on it.
 #
 # THE SCHEME-LESS `repoURL` IS DELIBERATE. Argo auto-enables OCI for a Helm source
 # whose `repoURL` carries no scheme, which is why `chart:` sits beside it. The

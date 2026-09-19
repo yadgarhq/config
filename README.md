@@ -2,7 +2,7 @@
 
 The configuration a yadgar installation reads at boot.
 
-This repository is a **template**. Clone it, edit the values in `chart/config/`, and point Argo at it: that is the whole of configuring an installation. Every setting is a line you can see, in a file you can diff, with the reasoning for its starting value written next to it.
+**An installation clones nothing** (ADR-0705). Upstream publishes this chart as a versioned OCI artifact, an organisation's own GitOps repository pins a version, and an upgrade is a version bump — see "Adopting this in your own installation" below. The values live here, in `chart/config/`: every setting is a line you can see, in a file you can diff, with the reasoning for its starting value written next to it.
 
 It is a **Helm chart that renders ConfigMaps** and nothing else — no controller, no loader, no API. ADR-0570: where a capability can be expressed as a Helm chart, it is expressed as one, so configuration reuses the sync, the review gate, the rollback and the audit trail the estate already runs.
 
@@ -34,7 +34,8 @@ A third mechanism would put one concept in two places, which is the single-write
 ```
 chart/Chart.yaml                the chart
 chart/values.yaml               deliberately empty of settings — see the file for why
-chart/values.schema.json        and a schema that refuses one, because nothing here reads `.Values`
+chart/values.schema.json        the shape of the values it does read, and a refusal for every other key
+chart/consequential.yaml        which knobs carry NO default and come from the adopter — empty today
 chart/templates/configmap.yaml  one ConfigMap per file below, named after the file
 chart/config/shared.yaml        knobs every service reads, with the same value in each
 chart/config/gateway.yaml       knobs only `gateway` reads
@@ -72,11 +73,13 @@ Editing `gateway.yaml` restarts `gateway`. **Editing `shared.yaml` restarts ever
 
 ADR-0705 splits defaults on exactly this criterion. A knob **may** carry a default in the pinned chart. A knob whose wrong value carries real consequence carries **no** default and is declared with Helm's `required`, so the sync fails naming the knob and the file.
 
-**That second half is NOT built here, and it cannot be while this chart reads no values.** Helm's `required` does work over a chart's own packaged documents — `.Files.Get` then `fromYaml`, no `.Values` reference needed, measured — but applying it here inverts the guarantee ADR-0705 wants. A knob with no default is absent from `chart/config/`, so the refusal fires for **everyone**: this repository's own `helm lint`, the reference cluster, every installation, permanently. No adopter can satisfy it, because there is no values path to supply it through. The only way to make it pass is to put the value back in `chart/config/` — at which point the knob has a default and is no longer the case the rule is about.
+**That second half is built, and `chart/consequential.yaml` is where a knob is named.** A knob listed there carries no default anywhere: it is absent from `chart/config/`, the adopter states it in their own values file, and nothing renders until they do — ADR-0705's "the refusal moves from boot to sync". `chart/templates/configmap.yaml` appends the values-supplied keys to its verbatim copy of the document, so the value lands in the one file the reader opens.
 
-So a mechanism was measured and deliberately **not** shipped. What ADR-0705's rule needs first is the delivery model in the paragraph below, and that is a ruling rather than a patch.
+**An earlier attempt read the chart's own packaged documents instead, and it was cut before it merged.** Helm's `required` does work over `.Files.Get` then `fromYaml`, measured — but it inverts the guarantee ADR-0705 wants. A knob with no default is absent from `chart/config/`, so a refusal reading `chart/config/` fires for **everyone**: this repository's own `helm lint`, the reference cluster, every installation, permanently, with no way for an adopter to satisfy it. The only way to make it pass was to put the value back, at which point the knob has a default and is no longer the case the rule is about. The input source is the whole of the difference.
 
-**Its declaration list is empty. That is a classification, not an omission.** All four knobs this repository defines keep their shipped default:
+**Two limits of the mechanism, both of them real.** The partition it can enforce is by **top-level key**, not by leaf: the append writes a top-level mapping into the copied document, so a top-level key that document already has would emit a duplicate mapping key, which `serde_yaml` refuses. A leaf-level partition would need a deep merge, and a merge would re-emit the document and take its comments away. So `tlsRotation.pollSeconds` cannot be declared while `tlsRotation.splayMaxSeconds` stays in `shared.yaml`; both move or neither does. And the moment the list is non-empty **this chart cannot render itself bare** — which is the point, and it lands on upstream too: `helm lint` and `ci / passed` must then be given `example/values.yaml` with the knob stated in it.
+
+**`chart/consequential.yaml` is empty. That is a classification, not an omission.** All four knobs this repository defines keep their shipped default:
 
 | knob                          | reader                                       | why it keeps its default                                                                                                                                                                                                         |
 | ----------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -91,9 +94,11 @@ So a mechanism was measured and deliberately **not** shipped. What ADR-0705's ru
 
 **`audit.retentionDays` looks like the archetype and is not, because it has no reader at all.** The audit store is designed and not built, and ADR-0574 records that reader-less state as deliberate rather than an oversight. Declaring it `required` would force every installation to state a number nothing consumes: a refusal that protects nothing and fails syncs to do it. **Do not read the missing reader as a defect to fix by making the knob refuse.** When the audit module ships and reads this file, classify it again — D25 says an audit log with silent holes is worse than none, because it will be trusted, and a retention window only becomes consequential once something honours it.
 
-**The file a refusal names follows the delivery path.** The refusal that exists today is the boot-time one, raised by each knob's own reader, and a knob lives in `chart/config/<file>.yaml`, so that is the file its message names. ADR-0705 describes a different delivery — the chart pinned as an OCI artifact, the values held in an organisation's own repository — and **this chart does not implement it**: nothing under `chart/` reads `.Values`, and `chart/templates/configmap.yaml` copies the documents out of the chart's own files. When that changes, the message names whichever file an adopter edits then.
+**The file a refusal names follows the delivery path.** The refusal that exists today is the boot-time one, raised by each knob's own reader, and a knob lives in `chart/config/<file>.yaml`, so that is the file its message names. ADR-0705's own delivery — the chart pinned as an OCI artifact, the values held in an organisation's own repository — **is now expressible**, and a consequential knob's refusal is raised by the chart at sync rather than by the reader at boot. Its message names the knob, the path to set it under in the adopter's values file, and the `chart/config/` document it belongs to, because that document is what the value is appended to and what the reader opens. **No knob takes that path today**, so every refusal that actually fires in this estate is still the boot-time one.
 
-**Nothing here reads a Helm value, and `chart/values.schema.json` refuses one rather than dropping it.** A key set in a values file, in an Argo Application's `helm.parameters`, or with `--set` reached nothing and reported success — the silent no-op ADR-0569 exists to delete, one layer out. The schema is closed and declares no properties, so helm refuses the key by name in both `helm lint` and `helm template`. **The knobs are deliberately absent from it:** a typed `tlsRotation.pollSeconds` property would pass an adopter's value and the chart would still ignore it, which is validation blessing inert input. The pull request that teaches this chart to read values is the one that fills `properties` in.
+**This chart reads a Helm value for exactly the knobs `chart/consequential.yaml` declares, and that list is empty — so every key is still refused.** A key set in a values file, in an Argo Application's `helm.parameters`, or with `--set` reached nothing and reported success up to chart 0.1.1 — the silent no-op ADR-0569 exists to delete, one layer out. `chart/values.schema.json` is closed and declares no properties, so helm refuses the key by name in both `helm lint` and `helm template`.
+
+**The two files open together, knob by knob, and `additionalProperties: false` never opens at all.** A typed property with no declaration would pass an adopter's value and the chart would still ignore it, which is validation blessing inert input; a declared knob with no property is refused by the closed schema before the template runs, so the adopter meets an error about the key upstream told them to set. `scripts/one_source_per_knob.py` refuses both directions, and it counts a declared knob as a definition alongside `chart/config/`, so one-knob-one-source is checked across both sources rather than in the directory alone.
 
 ## How a service reads this
 
@@ -146,16 +151,25 @@ two differ on purpose: that one follows `main` by a git path under D55, so a mer
 here reaches the reference cluster at once. That is right for the repository that
 owns the chart and wrong for an installation consuming it, which pins a version.
 
-**An adopter cannot override a setting, and there is deliberately no
-example values file.** This chart has no Helm values interface at all: the template
-copies `chart/config/*.yaml` verbatim out of the packaged artifact with
-`.Files.Get`, and nothing in `chart/` references `.Values`. A `-f your-values.yaml`
-therefore renders byte-identical output and exits 0 — no warning, no failure, no
-effect. ADR-0705's remaining half is the values interface and the `required` refusal
-that goes with it; `required` needs a `.Values` reference, and introducing one
-reverses this chart's byte-for-byte copy property, so it is a ruling rather than a
-patch. Until it is ruled on, an installation that needs a different value changes it
-here, upstream, as a reviewed pull request.
+`example/values.yaml` is the values file that goes beside it, and copying it
+changes nothing. **No knob requires a value today**, which is measured rather than
+claimed: that file is `{}`, and a render with it is byte-for-byte a render without
+it. It is there to show you the shape before you need it, and to be the file you
+already have when a future chart version declares its first consequential knob.
+
+**What you may set in it is exactly the knobs `chart/consequential.yaml` declares
+upstream, and nothing else.** Every other key is REFUSED by name —
+`helm template` and `helm lint --strict` both exit 1, and so does your sync. Up to
+chart 0.1.1 such a key was silently DROPPED instead: byte-identical output, exit 0,
+no warning. An ordinary knob is not settable here at all, and that is ADR-0705's
+split rather than an omission: a knob whose wrong value costs timing or load keeps
+its default in the pinned chart, and only a knob whose wrong value carries real
+consequence is lifted out of it. All four knobs are in the first category today.
+
+**How you learn a knob has become consequential: you bump `targetRevision` and the
+sync fails, naming the knob and the file.** An installation that needs a different
+value for an ordinary knob still changes it here, upstream, as a reviewed pull
+request.
 
 To see exactly what a pinned version puts in your cluster:
 

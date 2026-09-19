@@ -1,0 +1,76 @@
+# WHICH KNOBS CARRY NO DEFAULT. This file is the declaration list ADR-0705 rule 2
+# needs, and it is DELIBERATELY EMPTY.
+#
+#   {}   means: every knob this chart defines carries its shipped default, and an
+#        adopter's values file is refused in full by `values.schema.json`.
+#
+# ADR-0705 splits defaults by blast radius. An ordinary knob keeps a default in
+# the pinned chart, so adding one upstream is not a breaking upgrade — the ruling
+# rejects forbidding chart defaults outright for exactly that reason. A knob whose
+# wrong value carries real consequence carries NO default and is named here, and
+# then nothing renders until the adopter states it: "the refusal moves from boot
+# to sync".
+#
+# THE CLASSIFICATION FOR ALL FOUR CURRENT KNOBS IS IN THE README, under "Blast
+# radius also decides which knobs carry a default", with the reasoning per knob.
+# Read it before adding a line here. An empty list is a classification, not an
+# omission.
+#
+# ─── the shape ───────────────────────────────────────────────────────────────
+#
+#   <config file stem>:
+#     - <dotted knob path>
+#
+# So a consequential `archive.bucketName` in `chart/config/audit.yaml` reads:
+#
+#   audit:
+#     - archive.bucketName
+#
+# and the adopter states it in their own values file under the SAME two names,
+# the file stem outermost:
+#
+#   audit:
+#     archive:
+#       bucketName: yadgar-audit-archive
+#
+# `chart/templates/configmap.yaml` then appends those keys to the verbatim copy of
+# `chart/config/audit.yaml`, so the value lands in the ONE document the reader
+# opens. A service mounts the ConfigMap as a DIRECTORY and reads one named path
+# (`/etc/yadgar/config/audit/audit.yaml`), so a second key or a second ConfigMap
+# would be a file nothing ever opens. That is why this appends rather than layers.
+#
+# ─── three things adding a line here obliges you to do ───────────────────────
+#
+# 1. OPEN `chart/values.schema.json` FOR EXACTLY THAT KNOB, and no further. The
+#    schema is closed (`additionalProperties: false`) at every level, so a knob
+#    declared here and absent from the schema is refused before this chart's
+#    template ever runs. `scripts/one_source_per_knob.py` refuses the two files
+#    disagreeing, in either direction.
+#
+# 2. DELETE THE KNOB FROM `chart/config/`. ADR-0705 amends ADR-0569 on the ORIGIN
+#    of a value only — one knob still has ONE source. The partition this mechanism
+#    can enforce is by TOP-LEVEL KEY, not by leaf: the append writes a top-level
+#    mapping into the copied document, so a top-level key that document already
+#    has would emit a duplicate mapping key, which `serde_yaml` rejects. A
+#    leaf-level partition would need a deep merge, and a merge would reformat the
+#    document and take its comments away — which is the property this chart exists
+#    to keep. So `tlsRotation.pollSeconds` cannot be declared here while
+#    `tlsRotation.splayMaxSeconds` stays in `shared.yaml`; both move or neither
+#    does. `scripts/one_source_per_knob.py` refuses it at commit time and the
+#    template refuses it at render time.
+#
+# 3. GIVE CI A VALUES FILE. The moment this list is non-empty, THIS CHART CANNOT
+#    RENDER ITSELF BARE — which is the whole point, and it lands on upstream too.
+#    `helm lint` and `helm template` with no values both refuse, so the shared
+#    `helm-lint` pre-commit hook and `ci / passed` go red until they are given
+#    `example/values.yaml` with the knob stated in it. That is the transition to
+#    plan for, not a surprise to discover; `test_required_knob.py`'s
+#    `test_the_shipped_chart_still_renders_with_no_values_at_all` is where it
+#    announces itself.
+#
+# ─── what this file is NOT ───────────────────────────────────────────────────
+#
+# It is not a values file and it renders no ConfigMap. `.Files.Glob` names
+# `config/*.yaml` and this file is a level above that directory, so it is read by
+# `chart/templates/configmap.yaml` and copied into nothing.
+{}
