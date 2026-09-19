@@ -1,0 +1,59 @@
+# THE ONLY FILE AN ORGANISATION EDITS. Copy it into your own GitOps repository at
+# whatever path `application.yaml`'s `$self/...` names, and change what you want
+# changed. Everything you do not state takes the pinned chart's own value.
+#
+# WHAT THIS FILE IS NOT. It is not a copy of the chart's `values.yaml`, and you
+# should not make it one. Stating a value you have not chosen means a future
+# upstream improvement to that value silently does not reach you — the same
+# divergence a cloned template produces, reintroduced one key at a time. Delete
+# every line below that you do not actually mean.
+#
+# HOW TO SEE WHAT YOU INHERIT, which is the question this file makes you ask:
+#
+#   helm show values oci://ghcr.io/yadgarhq/charts/config --version 0.1.0
+#
+# That prints the pinned chart's own defaults. It is the honest answer to "where
+# does this value come from if I do not set it", and it is why ADR-0705 permits a
+# chart default at all: a pinned chart is visible and reviewable, unlike a
+# constant compiled into a binary, which ADR-0569 forbids and still forbids.
+#
+# A KNOB WITH REAL CONSEQUENCE CARRIES NO DEFAULT. Where the chart declares one
+# with Helm's `required`, leaving it unset does not quietly pick something — the
+# SYNC FAILS and names the knob and the file. That refusal is the feature. If a
+# sync fails telling you a value is missing, the fix is to state it here, not to
+# work out what the old default was.
+
+# --- Rotation schedule, read by every service through yadgar-lifecycle ---------
+#
+# Both of these ship with working values, so this whole block is optional and is
+# shown to make the shape obvious. Delete it unless you are changing something.
+#
+# tlsRotation:
+#   # How often a service re-reads its certificate from disk. Lower means a
+#   # rotated certificate is picked up sooner and the API server is polled more.
+#   pollSeconds: 60
+#   # Jitter added per replica so replicas do not all wake together. It bounds
+#   # the extra delay, not the poll interval.
+#   splayMaxSeconds: 300
+
+# --- Audit retention ----------------------------------------------------------
+#
+# Ships at ninety days. Note plainly: NOTHING READS THIS YET. The audit store is
+# a future module and its absence is deliberate rather than an oversight — see
+# ADR-0574, which says so about this exact knob. It is here because the value is
+# the installation's to choose and the file it belongs in already exists.
+#
+# audit:
+#   retentionDays: 90
+
+# --- Per-service files --------------------------------------------------------
+#
+# The chart renders one ConfigMap per service plus one shared (ADR-0571), and a
+# knob lives in EXACTLY ONE of them — either shared or per-service, never both.
+# There is no merge and no precedence between them. Seven of the nine per-service
+# files are deliberately empty today: they render an empty ConfigMap so the mount
+# exists before anything needs it, which is ordering rather than oversight.
+#
+# When you need a per-service override, the shape mirrors the chart's own layout.
+# Do not invent a key here and expect it to be read — a knob nothing consumes is
+# just a line in your git history.

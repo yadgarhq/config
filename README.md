@@ -104,6 +104,26 @@ volumeMounts:
 
 Never `envFrom`. Environment variables are fixed at container start and kubelet never updates them, so an `envFrom` delivery would silently ignore every configuration change until something unrelated restarted the pod. It also collapses an absent knob and an empty one into a single case, which is exactly the distinction ADR-0569 needs.
 
+## Adopting this in your own installation
+
+`example/` holds the pair an organisation commits to **its own** GitOps repository:
+`application.yaml` and `values.yaml`. Copy both, edit the three marked lines — your
+repository URL, the path to your values file, and the chart version you pin — and
+you have this installation's configuration. You clone nothing, and you never fork
+the chart (ADR-0705).
+
+Those two files are a reference and nothing syncs them from here. `yadgarhq/deploy`'s
+`infra/config-app.yaml` is what deploys config into the reference cluster, and the
+two differ on purpose: that one follows `main` by a git path under D55, so a merge
+here reaches the reference cluster at once. That is right for the repository that
+owns the chart and wrong for an installation consuming it, which pins a version.
+
+To see what a pinned version gives you before you override anything:
+
+```
+helm show values oci://ghcr.io/yadgarhq/charts/config --version 0.1.0
+```
+
 ## Deployment
 
 Argo syncs this chart through `yadgarhq/deploy`'s `infra/config-app.yaml`, at a **sync wave earlier than the modules**. The ordering is load-bearing: every ConfigMap must exist before any pod that mounts it, or a first sync on a fresh cluster leaves pods in `ContainerCreating` waiting for a file.

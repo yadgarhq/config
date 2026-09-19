@@ -1,0 +1,77 @@
+# WHAT AN ORGANISATION COMMITS TO ITS OWN GitOps REPOSITORY. Copy this file and
+# `values.yaml` beside it into your repository, edit the two marked lines, and you
+# have a yadgar installation's configuration. You clone nothing (ADR-0705).
+#
+# This file is a REFERENCE, not a live manifest. Nothing in this repository syncs
+# it — `yadgarhq/deploy`'s own `infra/config-app.yaml` is what deploys config into
+# the reference installation. The two will differ: that one tracks `main` by a git
+# path under D55 so a merge here reaches the reference cluster immediately, which
+# is right for the repository that OWNS the chart and wrong for an installation
+# that merely consumes it. An installation pins a version.
+#
+# TWO SOURCES, and the second one is the whole point. Argo reads the chart from
+# the registry and the values from YOUR repository, so your settings live in your
+# git history and the chart stays a pinned artifact you never fork. The `ref:
+# self` / `$self/...` pair is the mechanism; `yadgarhq/argocd`'s own
+# `applications/argocd.yaml` uses the identical shape against the upstream Argo
+# chart, so this is the estate's existing idiom rather than a new one.
+#
+# THE SCHEME-LESS `repoURL` IS DELIBERATE. Argo auto-enables OCI for a Helm source
+# whose `repoURL` carries no scheme, which is why `chart:` sits beside it. The
+# explicit `oci://` form also works but takes `path: .` instead of `chart:`, and
+# the two must not be mixed — `yadgarhq/deploy`'s `infra/envoy-gateway.yaml` says
+# so at the site where it chose the other one.
+#
+# NO REPOSITORY SECRET, because the package is public and an anonymous pull is
+# what every installation does. Three Applications in the reference deployment
+# already pull public OCI charts with no credential at all. If Argo reports
+# `DENIED` or a 403 here, the package is private rather than absent — GHCR answers
+# the same way for both — and the fix is one visibility flip by whoever owns the
+# registry, not a Secret.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: config
+  # ARGO'S namespace, not the workload's. `destination.namespace` below is where
+  # the ConfigMaps land.
+  namespace: argocd
+  annotations:
+    # BEFORE THE SERVICES THAT MOUNT THESE. A ConfigMap volume is
+    # `optional: false` by default, so a pod whose ConfigMap has not synced yet
+    # does not fail — it sits in `ContainerCreating` indefinitely. That is the
+    # intended outcome when a ConfigMap is genuinely absent and a stuck
+    # installation when it is merely late, so this is ordering rather than
+    # preference. The modules are at wave 10.
+    argocd.argoproj.io/sync-wave: "-12"
+spec:
+  project: default
+  sources:
+    - repoURL: ghcr.io/yadgarhq/charts
+      chart: config
+      # PIN A VERSION, and bump it deliberately. This is the line an upgrade
+      # moves, and it is the only thing an upgrade moves — the chart improves
+      # upstream and reaches you when you change this number, which is what a
+      # reference buys you over a clone.
+      #
+      # BARE SEMVER, no leading `v`. The git tag is `v0.1.0`; the chart version
+      # is `0.1.0`, because the release pipeline strips the `v` once and every
+      # published artifact carries the bare form.
+      targetRevision: 0.1.0
+      helm:
+        valueFiles:
+          # EDIT THIS PATH to wherever you put `values.yaml` in your repository.
+          - $self/yadgar/values.yaml
+    - # EDIT THIS to your own repository. It supplies the values file above and
+      # nothing else; Argo needs it declared as a source to resolve `$self`.
+      repoURL: https://github.com/YOUR-ORG/YOUR-GITOPS-REPO
+      targetRevision: main
+      ref: self
+  destination:
+    server: https://kubernetes.default.svc
+    # THE SERVICES' OWN NAMESPACE, and it has to be. A pod can only mount a
+    # ConfigMap from the namespace it runs in, so the configuration for `yadgar`
+    # cannot live anywhere else.
+    namespace: yadgar
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]
