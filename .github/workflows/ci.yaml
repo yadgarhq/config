@@ -80,9 +80,9 @@ jobs:
   #
   # THE FAILURE WAS GREEN, which is why it survived. Both secrets are declared
   # `required: false` in the callee, so a caller that passes none hands over
-  # two empty strings. The retired `deployment` job detected that and reported
-  # SUCCESS rather than refusing; `parent`'s `cred` step now fails the release
-  # and names the repair.
+  # two empty strings. Where it ran, the retired `deployment` job detected that
+  # and reported SUCCESS rather than refusing; `parent`'s `cred` step now fails
+  # the release and names the repair.
   #
   # NAMED RATHER THAN `secrets: inherit`, for the reason set out above the
   # `main:` job. The same zizmor audit reads this call too.
