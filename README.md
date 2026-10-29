@@ -1,6 +1,6 @@
 # yadgar/config
 
-The configuration that a yadgar installation reads at boot.
+The configuration which a yadgar installation reads at boot.
 
 **An installation clones nothing and forks nothing** (ADR-0705, ADR-0721). Upstream publishes this chart as a versioned OCI artifact, an organisation's own GitOps repository pins a version, and an upgrade is a version bump — see "Adopting this in your own installation" below. The DEFAULTS live here, in `chart/config/`: every setting is a line you can see, in a file you can diff, with the reasoning for its starting value written next to it. An installation changes any one of them from its OWN repository, in one line, because each ConfigMap is rendered from a deep merge of the chart's document under that installation's values.
 
