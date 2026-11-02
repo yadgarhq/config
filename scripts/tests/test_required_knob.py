@@ -47,6 +47,7 @@ CHART = REPO / "chart"
 # `shared` and `audit` render with different bytes as well as `gateway` and the
 # rest rendering not at all. Taken by running this file's own `render_sha256`
 # against the edited chart, not transcribed.
+# Hashed after `normalise_render` (below), so it holds under helm 3 and helm 4.
 BASELINE_SHA256 = "6954cbbb6e77fd4bd2740c58d99832449ad6176ff29657746d221c45583ade27"
 
 
@@ -64,12 +65,29 @@ def helm(*arguments: str):
     return subprocess.run([binary, *arguments], capture_output=True, text=True)
 
 
+def normalise_render(text: str) -> str:
+    """Erase the ONE byte-level difference between helm majors, and nothing else.
+
+    helm 4 writes two blank lines before each `---` document separator where
+    helm 3 writes none (measured 2026-11-02: helm 3.20.2 reproduces the CI pin
+    3.18.4's hash; helm 4.3.0 differs only by that extra blank line). Collapsing
+    runs of blank lines IMMEDIATELY BEFORE a separator to none keeps the guard
+    byte-exact everywhere else: values, comments, key order, indentation, the
+    trailing newline, and blank lines inside documents all still move the hash.
+    A parsed-YAML comparison was rejected because it would drop the template
+    comments this baseline exists to pin.
+    """
+    import re
+
+    return re.sub(r"\n{2,}(?=---\n)", "\n", text)
+
+
 def render_sha256(*arguments: str) -> str:
     import hashlib
 
     result = helm("template", "ci-render", *arguments)
     assert result.returncode == 0, result.stderr
-    return hashlib.sha256(result.stdout.encode()).hexdigest()
+    return hashlib.sha256(normalise_render(result.stdout).encode()).hexdigest()
 
 
 def chart_copy(tmp_path: Path, *, declare: dict, schema_properties: dict) -> Path:
@@ -455,6 +473,32 @@ def test_an_undeclared_key_is_still_refused_when_a_knob_is_declared(tmp_path):
     result = helm("template", "ci-render", str(copy), "-f", str(values))
     assert result.returncode != 0
     assert "shared" in result.stderr
+
+
+# ------------------------- the baseline hash must not depend on the helm major (#491)
+
+HELM3_SHAPE = "a: 1\n---\n# Source: x\nb: 2\n"
+HELM4_SHAPE = "a: 1\n\n\n---\n# Source: x\nb: 2\n"
+
+
+def test_the_render_hash_ignores_the_blank_lines_helm_4_adds_before_a_separator():
+    """helm 4 writes two blank lines before each `---` where helm 3 writes none, so a
+    raw hash pinned from CI (helm 3.18.4) failed on every helm 4 workstation.
+    """
+    assert normalise_render(HELM4_SHAPE) == normalise_render(HELM3_SHAPE)
+
+
+def test_the_render_normaliser_still_sees_every_other_byte():
+    """MUTATION TABLE for the normaliser: it forgives ONLY blank lines before `---`."""
+    forgiven = normalise_render(HELM3_SHAPE)
+    for mutated in (
+        "a: 2\n---\n# Source: x\nb: 2\n",  # value changed
+        "a: 1\n---\n# Source: y\nb: 2\n",  # comment changed
+        "a: 1\n---\n# Source: x\nb: 2\n\n",  # trailing blank line added
+        "a: 1\n---\n# Source: x\n\nb: 2\n",  # blank line added elsewhere
+        "a: 1\n---\n# Source: x\nb: 2",  # final newline lost
+    ):
+        assert normalise_render(mutated) != forgiven, mutated
 
 
 # ------------------------------- what declaring nothing must cost: nothing at all
