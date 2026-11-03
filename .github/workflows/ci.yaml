@@ -36,7 +36,7 @@ jobs:
   # job breaks the merge gate rather than reporting anything.
   ci:
     if: github.event_name == 'pull_request'
-    uses: yadgarhq/actions/.github/workflows/ci-pr.yaml@main
+    uses: yadgarhq/actions/.github/workflows/ci-pr.yaml@747d514b99011d1ae0c13a2916abf11e4c00b1ae
     permissions:
       contents: read
       checks: read
