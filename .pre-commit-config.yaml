@@ -9,7 +9,9 @@ repos:
       - id: mixed-line-ending
         args: [--fix=lf]
       - id: check-merge-conflict
+        args: [--assume-in-merge]
       - id: check-added-large-files
+        args: [--enforce-all]
       - id: check-yaml
         # Helm templates are Go templates that HAPPEN to look like YAML, so a
         # real parser rejects them. `helm lint` and `helm template` below are the
